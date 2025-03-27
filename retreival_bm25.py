@@ -15,23 +15,11 @@ nltk.download('punkt_tab')
 def tokenize(text):
     return word_tokenize(text.lower())
 
-################################hChunking#########################
-
-#Cell chunking and its metadata
-  # def chunk_cell(cell_text, cell_id, table_name, row_id, col_id):
-  #     return {
-  #         "text": cell_text,
-  #         "metadata": {
-  #             "table_name": table_name,
-  #             "row_id": row_id,
-  #             "col_id": col_id,
-  #             "chunk_id": f"{table_name}_cell_{row_id}_{col_id}"
-  #         }
-  #     }
+################################ Chunking #################################
 
 # Row chunking and its metadata
 def chunk_row(row, row_id, table_name, columns):
-    row_text = ' '.join([f"{columns[i]['text']}: {cell['text']}" for i, cell in enumerate(row['cells']) if columns[i]['text']])
+    row_text = ' | '.join([f"{columns[i]['text']}: {cell['text']}" for i, cell in enumerate(row['cells']) if columns[i]['text']])
     return {
         "text": row_text,
         "metadata": {
@@ -41,16 +29,15 @@ def chunk_row(row, row_id, table_name, columns):
             "chunk_type": "row",
             "columns": [col["text"] for col in columns],
             "metadata_text": f"table: {table_name}, row: {row_id}, chunk_id: {table_name}_row_{row_id}, chunk_type: row, columns: {', '.join([col['text'] for col in columns if col['text']])}"
-
         }
     }
 
-#Column chunk and its metadata
+# Column chunk and its metadata
 def chunk_column(rows, col_id, col_name, table_name):
     column_text = ' | '.join([row['cells'][col_id]['text'] for row in rows if row['cells'][col_id]['text']])
 
     return {
-        "text": f"{col_name if col_name else ''}: {column_text}",  # Ensure blank column names are handled
+        "text": f"{col_name if col_name else ''}: {column_text}",
         "metadata": {
             "table_name": table_name,
             "col_id": col_id,
@@ -61,26 +48,25 @@ def chunk_column(rows, col_id, col_name, table_name):
     }
 
 # Table chunking with its metadata
-def chunk_table(rows, table_id):
-    """
-    Create a table-level chunk with metadata.
-    """
-    table_text = ' '.join([cell['text'] for row in rows for cell in row['cells']])
+def chunk_table(rows, table_id, columns):
+    column_names = " | ".join([col['text'] for col in columns])
+    table_text = '\n'.join([column_names] + [' | '.join([cell['text'] for cell in row['cells']]) for row in rows])
+
     return {
         "text": table_text,
         "metadata": {
             "table_name": table_id,
             "chunk_id": f"{table_id}_table",
             "chunk_type": "table",
-            "metadata_text": f"table_name: {table_id},chunk_id: {table_id}_table, chunk_type: table"
+            "columns": [col["text"] for col in columns],  # Adding column names
+            "metadata_text": f"table_name: {table_id}, chunk_id: {table_id}_table, chunk_type: table, columns: {', '.join([col['text'] for col in columns])}"
         }
     }
 
-########################Processing##################################
+######################## Processing ##################################
 
 # Process jsonl file: chunking
 def process_jsonl(file_path):
-
 
     metadata_list = []
     chunks = []
@@ -108,11 +94,12 @@ def process_jsonl(file_path):
                     metadata_list.append(col_chunk["metadata"])
 
             # Chunking table
-            table_chunk = chunk_table(rows, table_id)
+            table_chunk = chunk_table(rows, table_id, columns)
             chunks.append(table_chunk)
             table_chunks.append(table_chunk)
 
     return metadata_list, chunks, table_chunks
+
 
 # Rank Chunks
 def rank_chunks_with_bm25(tokenized_chunks, query, top_n):
@@ -228,7 +215,7 @@ def main(file_path, dev_file_path, output_dir, top_n, queries_count):
 file_path = "tables.jsonl"
 dev_file = "test.jsonl"
 output_dir = "results"
-top_n = 5000
-queries_count = 965
+top_n = 2500
+queries_count = 4
 
 main(file_path, dev_file, output_dir, top_n, queries_count)
