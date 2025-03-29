@@ -48,8 +48,8 @@ class URSModule(nn.Module):
         mu = self.fc_mu(h)   # shape: (batch_size, 1)
         sigma = F.softplus(self.fc_sigma(h))  # ensures sigma > 0
         
-        # Sample s from standard normal
-        s = torch.randn_like(sigma)
+        # Sample s from normal distribution with mean mu and std sigma
+        s = torch.normal(mean=mu, std=sigma)  # this tweak is ours different from the CABINET
         
         # Reparameterization: z = mu + s * sigma --- latent variable
         z = mu + s * sigma
@@ -57,15 +57,6 @@ class URSModule(nn.Module):
         # Normalize with sigmoid
         eta_uns = torch.sigmoid(z)
         return eta_uns, mu, sigma
-
-# # Example: Simulate processing a batch of token embeddings.
-# hidden_dim = 768  # example hidden dimension from an LLM
-# urs_model = URSModule(hidden_dim)
-# # Assume batch_embeddings is a tensor from your LLM's encoder
-# batch_embeddings = torch.randn(32, hidden_dim)  # simulate 32 tokens
-# eta_uns, mu, sigma = urs_model(batch_embeddings)
-# print("Unsupervised Relevance Scores:", eta_uns.shape)
-
 
 #******************Weak Supervision Module******************#
 # This module computes the weak supervision score for each token in the input
@@ -101,6 +92,8 @@ class CombinedModule(nn.Module):
         super(CombinedModule, self).__init__()
         self.urs_module = URSModule(hidden_dim)
         self.ws_module = WeakSupervisionModule(hidden_dim)
+        self.lambda_urs = 0.6  # weight for unsupervised relevance score ----> can be tuned
+        self.lambda_ws = 0.4   # weight for weak supervision score  ----> can be tuned
     
     def forward(self, h):
         """
@@ -115,7 +108,7 @@ class CombinedModule(nn.Module):
         eta_ws = self.ws_module(h)
         
         # Combine the scores (you can adjust the combination method)
-        eta_combined = eta_uns * eta_ws
+        eta_combined = self.lambda_urs*eta_uns + self.lambda_ws*eta_ws
         return eta_combined, mu, sigma
     
 #******************Pruning Function******************#
@@ -123,7 +116,7 @@ class CombinedModule(nn.Module):
 # It filters out chunks with scores below a certain threshold.
 #--------------------------------------------------------------------------#    
     
-def prune_chunks(chunks, scores, threshold=0.3):
+def prune_chunks(chunks, scores, threshold=0.6): # here this threshold can be tuned
     """
     chunks: list of chunk dicts.
     scores: list of combined relevance scores corresponding to each chunk.
@@ -172,6 +165,31 @@ def chunks_to_dataframe(chunks):
     
     return pd.DataFrame(data)
 
+def extract_table_ids_from_test_jsonl():
+    """Extract table IDs from test.jsonl file."""
+    table_ids = []
+    table_info = []
+    
+    try:
+        with jsonlines.open('test.jsonl', 'r') as reader:
+            for item in reader:
+                if 'table' in item and 'tableId' in item['table']:
+                    table_id = item['table']['tableId']
+                    title = item['table'].get('documentTitle', 'Unknown title')
+                    
+                    # Only add if not already in the list
+                    if table_id not in [t['id'] for t in table_info]:
+                        table_info.append({
+                            'id': table_id,
+                            'title': title,
+                            'questions': [q['originalText'] for q in item.get('questions', [])]
+                        })
+                        table_ids.append(table_id)
+    except Exception as e:
+        print(f"Error reading test.jsonl: {e}")
+    
+    return table_info, table_ids
+
 # Main execution block
 if __name__ == "__main__":
     # Determine which table ID to use
@@ -179,16 +197,42 @@ if __name__ == "__main__":
         TARGET_TABLE_ID = sys.argv[1]
         print(f"Using table ID from command line: {TARGET_TABLE_ID}")
     else:
-        # Show available tables
-        print("Available tables (first 10):")
-        tables = list_available_tables()
-        for i, table in enumerate(tables):
-            print(f"{i+1}. {table['id']} - {table['title']}")
+        # Extract table IDs from test.jsonl
+        test_table_info, test_table_ids = extract_table_ids_from_test_jsonl()
         
-        # Default to first table
-        TARGET_TABLE_ID = tables[0]['id']
-        print(f"Using default table ID: {TARGET_TABLE_ID}")
-        print("To use a different table, run: python3 pruning.py <table_id>")
+        if test_table_ids:
+            print("Available tables from test.jsonl:")
+            for i, table_info in enumerate(test_table_info):
+                print(f"{i+1}. {table_info['id']} - {table_info['title']}")
+                # Show questions if available
+                if table_info['questions']:
+                    print(f"   Questions: {', '.join(table_info['questions'][:2])}")
+                    if len(table_info['questions']) > 2:
+                        print(f"   ...and {len(table_info['questions'])-2} more questions")
+            
+            # Prompt user to select a table ID
+            print("\nEnter the table ID you want to use (or press Enter to use the first one):")
+            user_input = input("> ").strip()
+            
+            if user_input:
+                TARGET_TABLE_ID = user_input
+            else:
+                TARGET_TABLE_ID = test_table_ids[0]
+        else:
+            # Fall back to tables.jsonl if no tables found in test.jsonl
+            print("No tables found in test.jsonl. Showing available tables from tables.jsonl:")
+            tables = list_available_tables()
+            for i, table in enumerate(tables):
+                print(f"{i+1}. {table['id']} - {table['title']}")
+            
+            # Prompt user to select a table ID
+            print("\nEnter the table ID you want to use (or press Enter to use the first one):")
+            user_input = input("> ").strip()
+            
+            if user_input:
+                TARGET_TABLE_ID = user_input
+            else:
+                TARGET_TABLE_ID = tables[0]['id']
     
     print(f"\nStarting pruning process for table: {TARGET_TABLE_ID}")
     print("-" * 80)
@@ -287,7 +331,7 @@ if __name__ == "__main__":
     
     # Define multiple thresholds for testing
     thresholds = [0.2, 0.3, 0.4, 0.5]
-    final_threshold = 0.3  # Use this threshold for saving pruned chunks
+    final_threshold = 0.6  # Use this threshold for saving pruned chunks
     
     # Process each question
     for idx, item in enumerate(test_items):
