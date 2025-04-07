@@ -1,0 +1,124 @@
+[
+    {
+      "text": "Name: Alice | Age: 28 | City: New York",
+      "metadata": {
+        "table_name": "employees_table",
+        "row_id": 0,
+        "chunk_id": "employees_table_row_0",
+        "chunk_type": "row"
+      }
+    },
+    {
+      "text": "Name: Bob | Age: 34 | City: Chicago",
+      "metadata": {
+        "table_name": "employees_table",
+        "row_id": 1,
+        "chunk_id": "employees_table_row_1",
+        "chunk_type": "row"
+      }
+    },
+    {
+      "text": "Name: Charlie | Age: 22 | City: Seattle",
+      "metadata": {
+        "table_name": "employees_table",
+        "row_id": 2,
+        "chunk_id": "employees_table_row_2",
+        "chunk_type": "row"
+      }
+    },
+  
+    {
+      "text": "Name: Alice | Bob | Charlie",
+      "metadata": {
+        "table_name": "employees_table",
+        "col_id": 0,
+        "chunk_id": "employees_table_column_0",
+        "chunk_type": "column"
+      }
+    },
+    {
+      "text": "Age: 28 | 34 | 22",
+      "metadata": {
+        "table_name": "employees_table",
+        "col_id": 1,
+        "chunk_id": "employees_table_column_1",
+        "chunk_type": "column"
+      }
+    },
+    {
+      "text": "City: New York | Chicago | Seattle",
+      "metadata": {
+        "table_name": "employees_table",
+        "col_id": 2,
+        "chunk_id": "employees_table_column_2",
+        "chunk_type": "column"
+      }
+    },
+  
+    {
+      "text": "Name | Age | City\nAlice | 28 | New York\nBob | 34 | Chicago\nCharlie | 22 | Seattle",
+      "metadata": {
+        "table_name": "employees_table",
+        "chunk_id": "employees_table_table",
+        "chunk_type": "table"
+      }
+    },
+  
+  
+    {
+      "text": "Employee: Alice | Position: Software Engineer | Salary: 90000",
+      "metadata": {
+        "table_name": "salaries_table",
+        "row_id": 0,
+        "chunk_id": "salaries_table_row_0",
+        "chunk_type": "row"
+      }
+    },
+    {
+      "text": "Employee: Bob | Position: Manager | Salary: 120000",
+      "metadata": {
+        "table_name": "salaries_table",
+        "row_id": 1,
+        "chunk_id": "salaries_table_row_1",
+        "chunk_type": "row"
+      }
+    },
+  
+    {
+      "text": "Employee: Alice | Bob",
+      "metadata": {
+        "table_name": "salaries_table",
+        "col_id": 0,
+        "chunk_id": "salaries_table_column_0",
+        "chunk_type": "column"
+      }
+    },
+    {
+      "text": "Position: Software Engineer | Manager",
+      "metadata": {
+        "table_name": "salaries_table",
+        "col_id": 1,
+        "chunk_id": "salaries_table_column_1",
+        "chunk_type": "column"
+      }
+    },
+    {
+      "text": "Salary: 90000 | 120000",
+      "metadata": {
+        "table_name": "salaries_table",
+        "col_id": 2,
+        "chunk_id": "salaries_table_column_2",
+        "chunk_type": "column"
+      }
+    },
+  
+    {
+      "text": "Employee | Position | Salary\nAlice | Software Engineer | 90000\nBob | Manager | 120000",
+      "metadata": {
+        "table_name": "salaries_table",
+        "chunk_id": "salaries_table_table",
+        "chunk_type": "table"
+      }
+    }
+  ]
+  
