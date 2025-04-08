@@ -4,3 +4,5 @@ chunks.json
 pruned-chunks-json/
 venv/
 tables.jsonl
+tokenized_chunks.jsonl
+NQ-Dataset/

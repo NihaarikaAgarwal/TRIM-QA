@@ -4,6 +4,7 @@ import csv
 from tqdm import tqdm
 from rank_bm25 import BM25Okapi
 import numpy as np
+import random
 
 import nltk
 from nltk.tokenize import word_tokenize
@@ -155,18 +156,37 @@ def load_tokenized_chunks(filepath):
     return tokenized_chunks
 
 # Main script
-def main(file_path, dev_file_path, output_dir, top_n, queries_count, tokenized_chunks_file=None):
-    total_recall = 0
-    total_queries = 0
-    total_top_10 = 0
-    total_top_20 = 0
-    results = []
-
+def main(file_paths, tables_file_path, output_dir, top_n_values, queries_count, saved_queries_path, tokenized_chunks_file=None):
+    # Check if the random queries already exist
+    if os.path.exists(saved_queries_path):
+        print(f"Loading saved queries from {saved_queries_path}")
+        with open(saved_queries_path, 'r') as f:
+            selected_queries = [json.loads(line) for line in f]
+    else:
+        # Combine all queries from the three files
+        all_queries = []
+        for file_path in file_paths:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    data = json.loads(line.strip())
+                    all_queries.append(data)
+        
+        # Shuffle queries and select the random queries_count
+        random.shuffle(all_queries)
+        selected_queries = all_queries[:queries_count]
+        
+        # Save the random queries to a JSONL file for future use
+        print(f"Saving random queries to {saved_queries_path}")
+        with open(saved_queries_path, 'w') as f:
+            for query in selected_queries:
+                json.dump(query, f)
+                f.write("\n")
+    
     # Load or create tokenized chunks
     if tokenized_chunks_file and os.path.exists(tokenized_chunks_file):
         tokenized_chunks = load_tokenized_chunks(tokenized_chunks_file)
     else:
-        metadata, chunks, table_chunks = process_jsonl(file_path)
+        metadata, chunks, table_chunks = process_jsonl(tables_file_path)
         chunks = sorted(chunks, key=lambda x: x["metadata"]["table_name"])
     
         tokenized_chunks = []
@@ -180,28 +200,31 @@ def main(file_path, dev_file_path, output_dir, top_n, queries_count, tokenized_c
         if tokenized_chunks_file:
             save_tokenized_chunks(tokenized_chunks, tokenized_chunks_file)
 
-    # Process jsonl file and run BM25 on each queries_count
-    with open(dev_file_path, 'r') as dev_file:
-        for i, line in enumerate(tqdm(dev_file)):
-            if i >= queries_count:  
-                break
-            
-            data = json.loads(line.strip())
-            query = data['questions'][0]['originalText']
-            correct_table_id = data['table']['tableId']
+    total_recall = {top_n: 0 for top_n in top_n_values}
+    total_queries = 0
+    total_top_10 = {top_n: 0 for top_n in top_n_values}
+    total_top_20 = {top_n: 0 for top_n in top_n_values}
+    results = {top_n: [] for top_n in top_n_values}
 
-            tokenized_query = tokenize(query)
+    # Process selected random queries
+    for query_data in tqdm(selected_queries, desc="Processing Queries", unit="query"):
+        query = query_data['questions'][0]['originalText']
+        correct_table_id = query_data['table']['tableId']
+
+        tokenized_query = tokenize(query)
+
+        for top_n in top_n_values:
             ranked_chunks = rank_chunks_with_bm25(tokenized_chunks, tokenized_query, top_n)
 
             recall, rank, is_in_top_10, is_in_top_20 = calculate_recall(ranked_chunks, correct_table_id, top_n)
             print(f"Recall for query '{query}' is: {recall * 100:.2f}%")
 
-            total_recall += recall
-            total_top_10 += is_in_top_10
-            total_top_20 += is_in_top_20
+            total_recall[top_n] += recall
+            total_top_10[top_n] += is_in_top_10
+            total_top_20[top_n] += is_in_top_20
             total_queries += 1
 
-            results.append({
+            results[top_n].append({
                 "Recall": recall * 100,  # Recall as percentage
                 "Rank": rank if rank is not None else "Not found",
                 "Ans table in top 10%": is_in_top_10 * 100,
@@ -209,33 +232,34 @@ def main(file_path, dev_file_path, output_dir, top_n, queries_count, tokenized_c
             })
 
     # Calculate and print overall scores
-    recall_percentage = (total_recall / total_queries) * 100 if total_queries > 0 else 0
-    total_top_10_percentage = (total_top_10 / total_queries) * 100 if total_queries > 0 else 0
-    total_top_20_percentage = (total_top_20 / total_queries) * 100 if total_queries > 0 else 0
-    print(f"Overall Recall (Top {top_n} chunks): {recall_percentage:.2f}%, Top 10%: {total_top_10_percentage:.2f}%, Top 20%: {total_top_20_percentage:.2f}%")
+    for top_n in top_n_values:
+        recall_percentage = (total_recall[top_n] / total_queries) * 100 if total_queries > 0 else 0
+        total_top_10_percentage = (total_top_10[top_n] / total_queries) * 100 if total_queries > 0 else 0
+        total_top_20_percentage = (total_top_20[top_n] / total_queries) * 100 if total_queries > 0 else 0
+        print(f"Overall Recall (Top {top_n} chunks): {recall_percentage:.2f}%, Top 10%: {total_top_10_percentage:.2f}%, Top 20%: {total_top_20_percentage:.2f}%")
 
-    csv_filename = "query_results_top_" + str(top_n) + ".csv"
-    csv_filepath = os.path.join(output_dir, csv_filename)
+        # Save results to CSV for the current top_n
+        csv_filename = f"query_results_top_{top_n}.csv"
+        csv_filepath = os.path.join(output_dir, csv_filename)
+        with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ["Recall", "Rank", "Ans table in top 10%", "Ans table in top 20%"]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for result in results[top_n]:
+                writer.writerow(result)
 
-    # Write results to CSV
-    with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ["Recall", "Rank", "Ans table in top 10%", "Ans table in top 20%"]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
-        writer.writeheader()
-        for result in results:
-            writer.writerow(result)
+        print(f"Results saved to {csv_filepath}")
 
-    print(f"Results saved to {csv_filepath}")
-
-    save_top_chunks(ranked_chunks, output_dir, "top_chunks.json")
+        # Save top ranked chunks for the current top_n
+        save_top_chunks(results[top_n], output_dir, f"top_chunks_{top_n}.json")
 
 # Execution parameters
-file_path = "tables.jsonl"
-dev_file = "test.jsonl"
-output_dir = "saved_random_quries.jsonl"
+file_paths = ["NQ-Dataset/interactions/test.jsonl", "NQ-Dataset/interactions/train.jsonl", "NQ-Dataset/interactions/dev.jsonl"]
+tables_file_path = "NQ-Dataset/tables/tables.jsonl"
+output_dir = "results"
 tokenized_chunks_file = "tokenized_chunks.jsonl"
+saved_queries_path = "saved_random_queries.jsonl"
 top_n = 2500
 queries_count = 4
 
-main(file_path, dev_file, output_dir, top_n, queries_count, tokenized_chunks_file)
+main(file_paths, tables_file_path, output_dir, top_n, queries_count, saved_queries_path, tokenized_chunks_file)
