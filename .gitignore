@@ -1,0 +1,6 @@
+pruning_results/
+Top-150-Quries/
+chunks.json
+pruned-chunks-json/
+venv/
+tables.jsonl

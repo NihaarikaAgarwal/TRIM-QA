@@ -9,6 +9,48 @@ from transformers import AutoModel, AutoTokenizer
 import jsonlines
 import time
 import os
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+
+# Supercomputer configurations
+def setup_supercomputer_config():
+    # Enable GPU if available
+    if torch.cuda.is_available():
+        # Set to use all available GPUs
+        n_gpus = torch.cuda.device_count()
+        device = torch.device("cuda")
+        
+        # Set GPU memory management
+        torch.cuda.empty_cache()
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        
+        # Set optimal chunk size for GPU memory
+        CHUNK_SIZE = 32  # Adjust based on GPU memory
+        
+        # Enable distributed training
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        
+    else:
+        device = torch.device("cpu")
+        n_gpus = 0
+        CHUNK_SIZE = 16
+    
+    # Set number of CPU workers for data loading
+    NUM_WORKERS = os.cpu_count()
+    
+    # Set batch size based on available resources
+    BATCH_SIZE = 64 * max(1, n_gpus)  # Scale with number of GPUs
+    
+    return {
+        'device': device,
+        'n_gpus': n_gpus,
+        'num_workers': NUM_WORKERS,
+        'batch_size': BATCH_SIZE,
+        'chunk_size': CHUNK_SIZE
+    }
 
 # Set tokenizers parallelism to avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -135,7 +177,7 @@ def list_available_tables(limit=10):
     with jsonlines.open('tables.jsonl', 'r') as reader:
         for i, table in enumerate(reader):
             if i >= limit:
-                break
+                break;
             tables.append({
                 'id': table['tableId'],
                 'title': table.get('documentTitle', 'Unknown title')
@@ -143,7 +185,7 @@ def list_available_tables(limit=10):
     return tables
 
 # Convert chunks to pandas DataFrame for visualization
-def chunks_to_dataframe(chunks):
+def chunks_to_dataframe(chunks, is_pruned_chunks=False, normalized_scores=None):
     """Convert chunks to a pandas DataFrame for better visualization."""
     data = []
     for i, chunk in enumerate(chunks):
@@ -155,12 +197,18 @@ def chunks_to_dataframe(chunks):
         col_id = chunk['metadata'].get('col_id', '')
         row_id = chunk['metadata'].get('row_id', '')
         
+        # Add score and pruning status
+        score = chunk.get('score', normalized_scores[i] if normalized_scores else 0.0)
+        is_pruned = "Yes" if is_pruned_chunks else "No"
+        
         data.append({
             'chunk_id': chunk_id,
             'chunk_type': chunk_type,
             'col_id': col_id,
             'row_id': row_id,
-            'text': chunk_text
+            'text': chunk_text,
+            'score': score,
+            'is_pruned': is_pruned
         })
     
     return pd.DataFrame(data)
@@ -190,56 +238,197 @@ def extract_table_ids_from_test_jsonl():
     
     return table_info, table_ids
 
+def process_query_file(query_file_path):
+    """Extract query information from a query CSV file."""
+    df = pd.read_csv(query_file_path)
+    # Get the first row since query is same for all rows
+    query = df['query'].iloc[0]
+    tables_info = []
+    for _, row in df.iterrows():
+        tables_info.append({
+            'table_id': row['top tables'],
+            'target_table': row['target table'],
+            'target_answer': row['target answer']
+        })
+    return query, tables_info
+
+def merge_chunks_to_dataframe(pruned_chunks):
+    """Merge row and column chunks into a single dataframe."""
+    # Filter out table chunks and organize remaining chunks
+    rows = []
+    columns = []
+    
+    for chunk in pruned_chunks:
+        if 'metadata' in chunk and 'chunk_type' in chunk['metadata']:
+            chunk_type = chunk['metadata']['chunk_type']
+            if chunk_type == 'row':
+                rows.append({
+                    'content': chunk['text'],
+                    'type': 'row',
+                    'row_id': chunk['metadata'].get('row_id', ''),
+                    'col_id': chunk['metadata'].get('col_id', ''),
+                    'score': chunk.get('score', 0.0)  # Add score if available
+                })
+            elif chunk_type == 'column':
+                columns.append({
+                    'content': chunk['text'],
+                    'type': 'column',
+                    'row_id': chunk['metadata'].get('row_id', ''),
+                    'col_id': chunk['metadata'].get('col_id', ''),
+                    'score': chunk.get('score', 0.0)  # Add score if available
+                })
+    
+    # Create dataframes and sort by row_id/col_id for better organization
+    row_df = pd.DataFrame(rows)
+    col_df = pd.DataFrame(columns)
+    
+    # Combine and sort
+    combined_df = pd.concat([row_df, col_df], ignore_index=True)
+    combined_df = combined_df.sort_values(['type', 'row_id', 'col_id'])
+    
+    return combined_df
+
+def ensure_directory(directory):
+    """Create directory if it doesn't exist."""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        
+def get_query_number(filename):
+    """Extract query number from filename."""
+    return int(''.join(filter(str.isdigit, filename)))
+
+def get_user_input():
+    """Get user input for number of queries and tables to process."""
+    try:
+        num_queries = input("Enter number of queries to test (press Enter for all queries): ").strip()
+        num_queries = int(num_queries) if num_queries else None
+        
+        num_tables = input("Enter number of tables to test per query (press Enter for all tables): ").strip()
+        num_tables = int(num_tables) if num_tables else None
+        
+        return num_queries, num_tables
+    except ValueError:
+        print("Invalid input. Using all queries and tables.")
+        return None, None
+
+def save_pruning_results(query, table_id, original_chunks, pruned_chunks, pruning_dir="pruning_results"):
+    """Save original chunks, pruned chunks and generate a report."""
+    # Create results directory if it doesn't exist
+    ensure_directory(pruning_dir)
+    
+    # Create base filename
+    base_filename = f"{table_id}_{query[:30].replace(' ', '_')}"
+    
+    # Get the scores from pruned chunks to identify which chunks were kept
+    pruned_chunk_ids = [chunk['metadata'].get('chunk_id') for chunk in pruned_chunks]
+    
+    # Save original chunks with pruning status
+    original_df = chunks_to_dataframe(original_chunks, normalized_scores=[chunk.get('score', 0.0) for chunk in original_chunks])
+    original_df['is_pruned'] = original_df['chunk_id'].apply(lambda x: "No" if x in pruned_chunk_ids else "Yes")
+    original_path = os.path.join(pruning_dir, f"{base_filename}_original.csv")
+    original_df.to_csv(original_path, index=False)
+    
+    # Save pruned chunks
+    pruned_df = chunks_to_dataframe(pruned_chunks, is_pruned_chunks=True)
+    pruned_path = os.path.join(pruning_dir, f"{base_filename}_pruned.csv")
+    pruned_df.to_csv(pruned_path, index=False)
+    
+    # Create and save merged row/column dataframe
+    merged_df = merge_chunks_to_dataframe(pruned_chunks)
+    merged_path = os.path.join(pruning_dir, f"{base_filename}_merged.csv")
+    merged_df.to_csv(merged_path, index=False)
+    
+    # Calculate raw score statistics
+    raw_scores = [chunk.get('score', 0.0) for chunk in original_chunks]
+    if raw_scores:
+        min_score = min(raw_scores)
+        max_score = max(raw_scores)
+        avg_score = sum(raw_scores) / len(raw_scores)
+    else:
+        min_score = max_score = avg_score = 0
+    
+    # Calculate normalized score statistics from the original chunks
+    scores = original_df['score'].tolist()
+    if scores:
+        min_norm = min(scores)
+        max_norm = max(scores)
+        avg_norm = sum(scores) / len(scores)
+    else:
+        min_norm = max_norm = avg_norm = 0
+    
+    # Generate HTML report with enhanced styling
+    html_content = f"""
+    <html>
+    <head>
+        <title>Pruning Report for {query}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1, h2 {{ color: #333; }}
+            .stats {{ margin: 20px 0; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }}
+            .table-container {{ margin: 20px 0; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; }}
+            th {{ background-color: #f2f2f2; }}
+            tr:nth-child(even) {{ background-color: #f9f9f9; }}
+            tr.kept {{ background-color: #d4edda; }}
+            tr.pruned {{ background-color: #f8d7da; }}
+        </style>
+    </head>
+    <body>
+        <h1>Pruning Report</h1>
+        <p>Question: {query}</p>
+        <p>Expected answer(s): {table_info.get('target_answer', ['Unknown'])}</p>
+        
+        <div class="stats">
+            <h2>Statistics</h2>
+            <p>Total chunks: {len(original_chunks)}</p>
+            <p>Pruned chunks: {len(original_chunks) - len(pruned_chunks)} ({(len(original_chunks) - len(pruned_chunks))/len(original_chunks)*100:.1f}%)</p>
+            <p>Pruning threshold: {0.6}</p>
+            <p>Raw score statistics - Min: {min_score:.4f}, Max: {max_score:.4f}, Avg: {avg_score:.4f}</p>
+            <p>Normalized score statistics - Min: {min_norm:.4f}, Max: {max_norm:.4f}, Avg: {avg_norm:.4f}</p>
+        </div>
+        
+        <div class="table-container">
+            <h2>Chunk Data with Scores</h2>
+    """
+    
+    # Apply CSS classes based on pruning status
+    styled_df = original_df.copy()
+    styled_df['_class'] = styled_df['is_pruned'].apply(lambda x: 'pruned' if x == 'Yes' else 'kept')
+    
+    # Convert DataFrame to HTML with proper row classes
+    df_html = styled_df.to_html(index=False, escape=False)
+    
+    # Add CSS classes to table rows based on pruning status
+    df_html = df_html.replace('<tr>', '<tr class="kept">', styled_df['is_pruned'].value_counts()['No'])
+    df_html = df_html.replace('<tr>', '<tr class="pruned">', styled_df['is_pruned'].value_counts()['Yes'])
+    
+    html_content += df_html
+    html_content += """
+        </div>
+    </body>
+    </html>
+    """
+    
+    report_path = os.path.join(pruning_dir, f"{base_filename}_report.html")
+    with open(report_path, 'w') as f:
+        f.write(html_content)
+    
+    return {
+        'original_path': f"{base_filename}_original.csv",
+        'pruned_path': f"{base_filename}_pruned.csv",
+        'merged_path': f"{base_filename}_merged.csv",
+        'report_path': f"{base_filename}_report.html"
+    }
+
 # Main execution block
 if __name__ == "__main__":
-    # Determine which table ID to use
-    if len(sys.argv) > 1:
-        TARGET_TABLE_ID = sys.argv[1]
-        print(f"Using table ID from command line: {TARGET_TABLE_ID}")
-    else:
-        # Extract table IDs from test.jsonl
-        test_table_info, test_table_ids = extract_table_ids_from_test_jsonl()
-        
-        if test_table_ids:
-            print("Available tables from test.jsonl:")
-            for i, table_info in enumerate(test_table_info):
-                print(f"{i+1}. {table_info['id']} - {table_info['title']}")
-                # Show questions if available
-                if table_info['questions']:
-                    print(f"   Questions: {', '.join(table_info['questions'][:2])}")
-                    if len(table_info['questions']) > 2:
-                        print(f"   ...and {len(table_info['questions'])-2} more questions")
-            
-            # Prompt user to select a table ID
-            print("\nEnter the table ID you want to use (or press Enter to use the first one):")
-            user_input = input("> ").strip()
-            
-            if user_input:
-                TARGET_TABLE_ID = user_input
-            else:
-                TARGET_TABLE_ID = test_table_ids[0]
-        else:
-            # Fall back to tables.jsonl if no tables found in test.jsonl
-            print("No tables found in test.jsonl. Showing available tables from tables.jsonl:")
-            tables = list_available_tables()
-            for i, table in enumerate(tables):
-                print(f"{i+1}. {table['id']} - {table['title']}")
-            
-            # Prompt user to select a table ID
-            print("\nEnter the table ID you want to use (or press Enter to use the first one):")
-            user_input = input("> ").strip()
-            
-            if user_input:
-                TARGET_TABLE_ID = user_input
-            else:
-                TARGET_TABLE_ID = tables[0]['id']
+    # Get user input for query and table limits
+    num_queries, num_tables = get_user_input()
     
-    print(f"\nStarting pruning process for table: {TARGET_TABLE_ID}")
-    print("-" * 80)
-
     # Initialize models
     hidden_dim = 768  # BERT/RoBERTa hidden dimension
-    model_name = "bert-base-uncased"  # or any other preferred model
+    model_name = "bert-base-uncased"
     
     print("Loading tokenizer and models...")
     start_time = time.time()
@@ -248,306 +437,138 @@ if __name__ == "__main__":
     combined_model = CombinedModule(hidden_dim)
     print(f"Models loaded in {time.time() - start_time:.2f} seconds")
     
-    # Read target table from tables.jsonl
-    print("Loading target table...")
-    target_table = None
-    with jsonlines.open('tables.jsonl', 'r') as reader:
-        for table in reader:
-            if table['tableId'] == TARGET_TABLE_ID:
-                target_table = table
-                break
+    # Create output directories
+    pruned_base_dir = os.path.expanduser("~/pruned")
+    html_base_dir = os.path.expanduser("~/html")
+    ensure_directory(pruned_base_dir)
+    ensure_directory(html_base_dir)
     
-    if not target_table:
-        print(f"Error: Could not find table with ID {TARGET_TABLE_ID}")
-        exit(1)
+    # Get list of query files
+    query_files = sorted(
+        [f for f in os.listdir("Top-150-Quries") if f.startswith("query") and f.endswith("_TopTables.csv")],
+        key=get_query_number
+    )
     
-    print(f"Found target table: {target_table.get('documentTitle', 'Unknown title')}")
+    # Apply query limit if specified
+    if num_queries is not None:
+        query_files = query_files[:num_queries]
+        print(f"Processing {len(query_files)} queries...")
+    else:
+        print("Processing all queries...")
     
-    # Get all table IDs (primary + alternatives) for the target table
-    target_table_ids = [TARGET_TABLE_ID]
-    if 'alternativeTableIds' in target_table and isinstance(target_table['alternativeTableIds'], list):
-        target_table_ids.extend(target_table['alternativeTableIds'])
-    
-    print(f"Looking for chunks with table IDs: {target_table_ids}")
-    
-    # Read chunks from chunks.json that match the target table
-    print("Loading and filtering chunks for target table...")
-    chunks = []
-    chunk_count = 0
-    matched_chunks = 0
-    
+    # Load all chunks once
+    print("Loading chunks from chunks.json...")
+    all_chunks = {}
     with jsonlines.open('chunks.json', 'r') as reader:
         for chunk in reader:
-            chunk_count += 1
-            if chunk_count % 10000 == 0:
-                print(f"  Processed {chunk_count} chunks, matched {matched_chunks} so far...")
-            
-            # Check if the chunk belongs to our target table or any of its alternative IDs
-            if 'metadata' in chunk and 'table_name' in chunk['metadata'] and chunk['metadata']['table_name'] in target_table_ids:
-                chunks.append(chunk)
-                matched_chunks += 1
+            if 'metadata' in chunk and 'table_name' in chunk['metadata']:
+                table_id = chunk['metadata']['table_name']
+                # Skip table-type chunks
+                if chunk['metadata'].get('chunk_type') != 'table':
+                    if table_id not in all_chunks:
+                        all_chunks[table_id] = []
+                    all_chunks[table_id].append(chunk)
     
-    print(f"Found {matched_chunks} chunks that match table ID '{TARGET_TABLE_ID}' out of {chunk_count} total chunks")
+    print(f"Loaded chunks for {len(all_chunks)} unique tables")
     
-    if not chunks:
-        print("Error: No matching chunks found for the target table")
-        exit(1)
-    
-    # Read questions for the target table from test.jsonl
-    print("Loading test questions for target table...")
-    test_items = []
-    with jsonlines.open('test.jsonl', 'r') as reader:
-        for item in reader:
-            # Check both tableId and alternativeTableIds fields
-            item_table_ids = [item.get('table_id', ''), item.get('tableId', '')]
-            
-            # Add alternativeTableIds if available
-            if 'alternativeTableIds' in item and isinstance(item['alternativeTableIds'], list):
-                item_table_ids.extend(item['alternativeTableIds'])
-            # Check tableId from the table object if available
-            if 'table' in item and 'tableId' in item['table']:
-                item_table_ids.append(item['table']['tableId'])
-            # Check alternativeTableIds from the table object if available
-            if 'table' in item and 'alternativeTableIds' in item['table'] and isinstance(item['table']['alternativeTableIds'], list):
-                item_table_ids.extend(item['table']['alternativeTableIds'])
-            
-            # Check if any of the tableIds match our target
-            if TARGET_TABLE_ID in item_table_ids and 'questions' in item:
-                for question in item['questions']:
-                    test_items.append({
-                        'question': question['originalText'],
-                        'answer': question['answer']['answerTexts']
-                    })
-    
-    print(f"Found {len(test_items)} test questions for target table")
-    
-    if not test_items:
-        # Create a sample question for demonstration if no test questions exist
-        test_items = [{
-            'question': f"What information is available about {target_table.get('documentTitle', 'this table')}?",
-            'answer': ["Sample answer"]
-        }]
-        print(f"No test questions found. Created a sample question for demonstration.")
-    
-    # Define multiple thresholds for testing
-    thresholds = [0.2, 0.3, 0.4, 0.5]
-    final_threshold = 0.6  # Use this threshold for saving pruned chunks
-    
-    # Process each question
-    for idx, item in enumerate(test_items):
-        question = item['question']
-        print(f"\n[{idx+1}/{len(test_items)}] Processing question: {question}")
-        print(f"Expected answer(s): {item['answer']}")
+    # Process each query file
+    for query_file in query_files:
+        query_num = get_query_number(query_file)
+        print(f"\nProcessing {query_file} (Query {query_num})")
         
-        # Tokenize and get embeddings for chunks and question
-        print("Computing embeddings for chunks...")
-        start_time = time.time()
+        # Create query-specific directories
+        query_pruned_dir = os.path.join(pruned_base_dir, f"query{query_num}")
+        query_html_dir = os.path.join(html_base_dir, f"query{query_num}")
+        ensure_directory(query_pruned_dir)
+        ensure_directory(query_html_dir)
         
-        chunk_embeddings = []
-        for i, chunk in enumerate(chunks):
-            if i % 10 == 0:
-                print(f"  Processing chunk {i+1}/{len(chunks)}...")
-            
-            # Combine chunk content into a single string
-            if isinstance(chunk['text'], list):
-                chunk_text = " ".join([str(cell) for cell in chunk['text']])
-            else:
-                chunk_text = str(chunk['text'])
-            
-            inputs = tokenizer(chunk_text, return_tensors="pt", padding=True, truncation=True)
-            with torch.no_grad():
-                embeddings = embedding_model.model(**inputs).last_hidden_state.mean(dim=1)
-                chunk_embeddings.append(embeddings)
+        # Process query file
+        query, tables_info = process_query_file(os.path.join("Top-150-Quries", query_file))
+        print(f"Query: {query}")
         
-        print(f"Generated embeddings for {len(chunks)} chunks in {time.time() - start_time:.2f} seconds")
+        # Apply table limit if specified
+        if num_tables is not None:
+            tables_info = tables_info[:num_tables]
+            print(f"Processing {len(tables_info)} tables...")
+        else:
+            print(f"Processing all {len(tables_info)} tables...")
         
-        # Get question embedding
-        print("Computing embedding for question...")
-        question_inputs = tokenizer(question, return_tensors="pt", padding=True, truncation=True)
+        # Get question embedding once for this query
+        question_inputs = tokenizer(query, return_tensors="pt", padding=True, truncation=True)
         with torch.no_grad():
             question_embedding = embedding_model.model(**question_inputs).last_hidden_state.mean(dim=1)
         
-        chunk_embeddings = torch.cat(chunk_embeddings, dim=0)
-        
-        print("Computing relevance scores...")
-        # Get combined relevance scores using both question and chunk embeddings
-        scores, _, _ = combined_model(chunk_embeddings)
-        scores = scores.squeeze().tolist()
-        
-        # Scale scores based on similarity with question
-        similarity_scores = torch.nn.functional.cosine_similarity(
-            chunk_embeddings, 
-            question_embedding.expand(chunk_embeddings.size(0), -1)
-        ).tolist()
-        
-        print(f"Computing similarity scores... done!")
-        
-        # Combine URS scores with question similarity
-        final_scores = [(s + sim) / 2 for s, sim in zip(scores, similarity_scores)]
-        
-        # Apply score normalization to spread out the scores
-        min_score = min(final_scores)
-        max_score = max(final_scores)
-        if max_score > min_score:  # Avoid division by zero
-            normalized_scores = [(score - min_score) / (max_score - min_score) for score in final_scores]
-        else:
-            normalized_scores = final_scores
-        
-        # Print score statistics for both raw and normalized scores
-        print(f"Raw score statistics - Min: {min(final_scores):.4f}, Max: {max(final_scores):.4f}, Avg: {sum(final_scores)/len(final_scores):.4f}")
-        print(f"Normalized score statistics - Min: {min(normalized_scores):.4f}, Max: {max(normalized_scores):.4f}, Avg: {sum(normalized_scores)/len(normalized_scores):.4f}")
-        
-        # Show top 5 highest scoring chunks
-        top_indices = sorted(range(len(normalized_scores)), key=lambda i: normalized_scores[i], reverse=True)[:5]
-        print("Top 5 chunks:")
-        for i, idx in enumerate(top_indices):
-            chunk_preview = str(chunks[idx]['text'])[:50] + "..." if len(str(chunks[idx]['text'])) > 50 else str(chunks[idx]['text'])
-            chunk_type = chunks[idx]['metadata']['chunk_type'] if 'metadata' in chunks[idx] and 'chunk_type' in chunks[idx]['metadata'] else "unknown"
-            print(f"  {i+1}. Score: {normalized_scores[idx]:.4f} (raw: {final_scores[idx]:.4f}) - Type: {chunk_type} - {chunk_preview}")
-        
-        # Prune chunks based on normalized scores with different thresholds
-        for threshold in thresholds:
-            pruned_chunks = prune_chunks(chunks, normalized_scores, threshold)
-            print(f"Pruning threshold: {threshold:.1f}")
-            print(f"Chunks with scores above threshold: {len(pruned_chunks)}/{len(chunks)} ({len(pruned_chunks)/len(chunks)*100:.1f}%)")
-        
-        # Use final_threshold for saving
-        pruned_chunks = prune_chunks(chunks, normalized_scores, final_threshold)
-        
-        # Save pruned chunks
-        output_filename = f"pruned_chunks_{TARGET_TABLE_ID}_{question[:20].replace(' ', '_')}.json"
-        with open(output_filename, 'w') as f:
-            json.dump(pruned_chunks, f, indent=2)
-        
-        print(f"Original chunks: {len(chunks)}, Pruned chunks: {len(pruned_chunks)}")
-        print(f"Saved pruned chunks to {output_filename}")
-        
-        # Create and save DataFrames for visualization
-        print("Converting chunks to DataFrames for visualization...")
-        
-        # Convert original chunks to DataFrame
-        original_df = chunks_to_dataframe(chunks)
-        
-        # Add score columns to the original DataFrame
-        original_df['raw_score'] = final_scores
-        original_df['normalized_score'] = normalized_scores
-        
-        # Convert pruned chunks to DataFrame
-        pruned_df = chunks_to_dataframe(pruned_chunks)
-        
-        # Save DataFrames to CSV
-        csv_dir = "pruning_results"
-        os.makedirs(csv_dir, exist_ok=True)
-        
-        csv_base = os.path.join(csv_dir, f"{TARGET_TABLE_ID}_{question[:20].replace(' ', '_')}")
-        original_csv = f"{csv_base}_original.csv"
-        pruned_csv = f"{csv_base}_pruned.csv"
-        
-        original_df.to_csv(original_csv, index=False)
-        pruned_df.to_csv(pruned_csv, index=False)
-        
-        print(f"Saved original chunks DataFrame to {original_csv}")
-        print(f"Saved pruned chunks DataFrame to {pruned_csv}")
-        
-        # Generate a basic HTML report with pandas styling
-        html_file = f"{csv_base}_report.html"
-        
-        try:
-            # Create a styled DataFrame with conditional formatting for scores
-            styled_df = original_df.copy()
-            styled_df['pruned'] = styled_df['chunk_id'].isin(pruned_df['chunk_id']).map({True: 'Yes', False: 'No'})
+        # Process each table
+        for table_info in tables_info:
+            table_id = table_info['table_id']
             
-            # Generate HTML report
-            html_content = f"""
-            <html>
-            <head>
-                <title>Pruning Report for {question}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                    h1, h2 {{ color: #333; }}
-                    .stats {{ margin: 20px 0; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }}
-                    .table-container {{ margin: 20px 0; }}
-                    table {{ border-collapse: collapse; width: 100%; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; }}
-                    th {{ background-color: #f2f2f2; }}
-                    tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                    .kept {{ background-color: #d4edda; }}
-                    .pruned {{ background-color: #f8d7da; }}
-                </style>
-            </head>
-            <body>
-                <h1>Pruning Report</h1>
-                <p>Question: {question}</p>
-                <p>Expected answer(s): {item['answer']}</p>
-                
-                <div class="stats">
-                    <h2>Statistics</h2>
-                    <p>Total chunks: {len(chunks)}</p>
-                    <p>Pruned chunks: {len(pruned_chunks)} ({len(pruned_chunks)/len(chunks)*100:.1f}%)</p>
-                    <p>Pruning threshold: {final_threshold}</p>
-                    <p>Raw score statistics - Min: {min(final_scores):.4f}, Max: {max(final_scores):.4f}, Avg: {sum(final_scores)/len(final_scores):.4f}</p>
-                    <p>Normalized score statistics - Min: {min(normalized_scores):.4f}, Max: {max(normalized_scores):.4f}, Avg: {sum(normalized_scores)/len(normalized_scores):.4f}</p>
-                </div>
-                
-                <div class="table-container">
-                    <h2>Chunk Data with Scores</h2>
-            """
+            # Skip if no chunks found for this table
+            if table_id not in all_chunks:
+                print(f"No chunks found for table {table_id}, skipping...")
+                continue
             
-            try:
-                # Try to use pandas styling with the correct method
-                # For older pandas versions, we need to use render() instead of to_html()
-                styled_df_style = styled_df.style.apply(
-                    lambda row: ['background-color: #d4edda' if row['pruned'] == 'Yes' else 'background-color: #f8d7da' for _ in row], 
-                    axis=1
+            chunks = all_chunks[table_id]
+            print(f"\nProcessing table {table_id} ({len(chunks)} chunks)")
+            
+            # Get embeddings for chunks
+            chunk_embeddings = []
+            for chunk in chunks:
+                # Combine chunk content into a single string
+                if isinstance(chunk['text'], list):
+                    chunk_text = " ".join([str(cell) for cell in chunk['text']])
+                else:
+                    chunk_text = str(chunk['text'])
+                
+                inputs = tokenizer(chunk_text, return_tensors="pt", padding=True, truncation=True)
+                with torch.no_grad():
+                    embeddings = embedding_model.model(**inputs).last_hidden_state.mean(dim=1)
+                    chunk_embeddings.append(embeddings)
+            
+            if not chunk_embeddings:
+                print(f"No valid chunks to process for table {table_id}, skipping...")
+                continue
+                
+            chunk_embeddings = torch.cat(chunk_embeddings, dim=0)
+            
+            # Get combined relevance scores
+            scores, _, _ = combined_model(chunk_embeddings)
+            scores = scores.squeeze().tolist()
+            
+            # Scale scores based on similarity with question
+            similarity_scores = torch.nn.functional.cosine_similarity(
+                chunk_embeddings,
+                question_embedding.expand(chunk_embeddings.size(0), -1)
+            ).tolist()
+            
+            # Combine scores and normalize
+            final_scores = [(s + sim) / 2 for s, sim in zip(scores, similarity_scores)]
+            min_score = min(final_scores)
+            max_score = max(final_scores)
+            if max_score > min_score:
+                normalized_scores = [(score - min_score) / (max_score - min_score) for score in final_scores]
+            else:
+                normalized_scores = final_scores
+            
+            # Prune chunks and create dataframe
+            pruned_chunks = prune_chunks(chunks, normalized_scores, threshold=0.3)
+            if pruned_chunks:
+                # Add scores to pruned chunks for reference
+                for chunk, score in zip(pruned_chunks, normalized_scores):
+                    chunk['score'] = score
+                
+                # Save results
+                result_files = save_pruning_results(
+                    query=query,
+                    table_id=table_id,
+                    original_chunks=chunks,
+                    pruned_chunks=pruned_chunks
                 )
+                print(f"\nResults saved:")
+                print(f"Original chunks: {result_files['original_path']}")
+                print(f"Pruned chunks: {result_files['pruned_path']}")
+                print(f"Merged row/column view: {result_files['merged_path']}")
+                print(f"HTML report: {result_files['report_path']}")
                 
-                # Try different methods to convert to HTML based on pandas version
-                try:
-                    styled_html = styled_df_style.to_html()  # Newer pandas versions
-                except AttributeError:
-                    try:
-                        styled_html = styled_df_style.render()  # Older pandas versions
-                    except AttributeError:
-                        # If neither method works, fall back to basic table
-                        raise ImportError("Pandas styling methods not available")
-                        
-                html_content += styled_html
-            except ImportError:
-                # Fall back to basic HTML table if Jinja2 is not available
-                print("Warning: Jinja2 not available. Using basic HTML table instead.")
-                table_html = "<table border='1'>\n"
-                
-                # Add header row
-                table_html += "<tr>"
-                for col in styled_df.columns:
-                    table_html += f"<th>{col}</th>"
-                table_html += "</tr>\n"
-                
-                # Add data rows
-                for _, row in styled_df.iterrows():
-                    bg_color = "#d4edda" if row['pruned'] == 'Yes' else "#f8d7da"
-                    table_html += f"<tr style='background-color: {bg_color}'>"
-                    for col in styled_df.columns:
-                        table_html += f"<td>{row[col]}</td>"
-                    table_html += "</tr>\n"
-                
-                table_html += "</table>"
-                html_content += table_html
-            
-            html_content += """
-                </div>
-            </body>
-            </html>
-            """
-            
-            with open(html_file, 'w') as f:
-                f.write(html_content)
-            
-            print(f"Generated HTML pruning report: {html_file}")
-        except Exception as e:
-            print(f"Warning: Could not generate HTML report due to error: {e}")
-            print("CSV files were still generated successfully.")
-        
-        print("-" * 80)
+                print(f"Processed {table_id}: {len(chunks)} chunks -> {len(pruned_chunks)} pruned chunks")
 
 
