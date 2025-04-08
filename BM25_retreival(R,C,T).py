@@ -156,7 +156,7 @@ def load_tokenized_chunks(filepath):
     return tokenized_chunks
 
 # Main script
-def main(file_paths, tables_file_path, output_dir, top_n_values, saved_queries_path, tokenized_chunks_file=None):
+def main(tables_file_path, output_dir, top_n_values, saved_queries_path, tokenized_chunks_file=None):
     # Check if the random queries already exist
     print(f"Loading saved queries from {saved_queries_path}")
     with open(saved_queries_path, 'r') as f:
@@ -234,11 +234,10 @@ def main(file_paths, tables_file_path, output_dir, top_n_values, saved_queries_p
         save_top_chunks(results[top_n], output_dir, f"top_chunks_{top_n}.json")
 
 # Execution parameters
-file_paths = ["NQ-Dataset/interactions/test.jsonl", "NQ-Dataset/interactions/train.jsonl", "NQ-Dataset/interactions/dev.jsonl"]
 tables_file_path = "NQ-Dataset/tables/tables.jsonl"
 output_dir = "results"
 tokenized_chunks_file = "tokenized_chunks.jsonl"
 saved_queries_path = "saved_random_queries.jsonl"
 top_n = 2500
 
-main(file_paths, tables_file_path, output_dir, top_n, saved_queries_path, tokenized_chunks_file)
+main(tables_file_path, output_dir, top_n, saved_queries_path, tokenized_chunks_file)
