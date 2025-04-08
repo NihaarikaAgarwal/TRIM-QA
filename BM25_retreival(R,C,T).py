@@ -139,27 +139,46 @@ def calculate_recall(ranked_chunks, correct_table_id, top_n):
 
     return 0, None, 0, 0  # Relevant item not found
 
-# Main script
-def main(file_path, dev_file_path, output_dir, top_n, queries_count):
-    metadata, chunks, table_chunks = process_jsonl(file_path)
-    chunks = sorted(chunks, key=lambda x: x["metadata"]["table_name"])
+def save_tokenized_chunks(tokenized_chunks, filepath):
+    with open(filepath, 'w', encoding='utf-8') as f:
+        for chunk in tokenized_chunks:
+            json.dump(chunk, f)
+            f.write('\n')
+    print(f"Saved tokenized chunks to {filepath}")
 
+def load_tokenized_chunks(filepath):
+    tokenized_chunks = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            tokenized_chunks.append(json.loads(line.strip()))
+    print(f"Loaded {len(tokenized_chunks)} tokenized chunks from {filepath}")
+    return tokenized_chunks
+
+# Main script
+def main(file_path, dev_file_path, output_dir, top_n, queries_count, tokenized_chunks_file=None):
     total_recall = 0
     total_queries = 0
     total_top_10 = 0
     total_top_20 = 0
     results = []
 
-    tokenized_chunks = []
-
-    for i, chunk in enumerate(tqdm(chunks, desc="Tokenizing Chunks", unit="chunk")):
-        table_id = chunk['metadata']['table_name']
-        tokenized_text = tokenize(chunk['text'] + str(chunk['metadata']))
-
-        tokenized_chunks.append({
-            "table_id": table_id,
-            "tokenized_text": tokenized_text,
-        })
+    # Load or create tokenized chunks
+    if tokenized_chunks_file and os.path.exists(tokenized_chunks_file):
+        tokenized_chunks = load_tokenized_chunks(tokenized_chunks_file)
+    else:
+        metadata, chunks, table_chunks = process_jsonl(file_path)
+        chunks = sorted(chunks, key=lambda x: x["metadata"]["table_name"])
+    
+        tokenized_chunks = []
+        for i, chunk in enumerate(tqdm(chunks, desc="Tokenizing Chunks", unit="chunk")):
+            table_id = chunk['metadata']['table_name']
+            tokenized_text = tokenize(chunk['text'] + str(chunk['metadata']))
+            tokenized_chunks.append({
+                "table_id": table_id,
+                "tokenized_text": tokenized_text,
+            })
+        if tokenized_chunks_file:
+            save_tokenized_chunks(tokenized_chunks, tokenized_chunks_file)
 
     # Process jsonl file and run BM25 on each queries_count
     with open(dev_file_path, 'r') as dev_file:
@@ -215,7 +234,8 @@ def main(file_path, dev_file_path, output_dir, top_n, queries_count):
 file_path = "tables.jsonl"
 dev_file = "test.jsonl"
 output_dir = "saved_random_quries.jsonl"
+tokenized_chunks_file = "tokenized_chunks.jsonl"
 top_n = 2500
 queries_count = 4
 
-main(file_path, dev_file, output_dir, top_n, queries_count)
+main(file_path, dev_file, output_dir, top_n, queries_count, tokenized_chunks_file)
