@@ -156,31 +156,11 @@ def load_tokenized_chunks(filepath):
     return tokenized_chunks
 
 # Main script
-def main(file_paths, tables_file_path, output_dir, top_n_values, queries_count, saved_queries_path, tokenized_chunks_file=None):
+def main(file_paths, tables_file_path, output_dir, top_n_values, saved_queries_path, tokenized_chunks_file=None):
     # Check if the random queries already exist
-    if os.path.exists(saved_queries_path):
-        print(f"Loading saved queries from {saved_queries_path}")
-        with open(saved_queries_path, 'r') as f:
-            selected_queries = [json.loads(line) for line in f]
-    else:
-        # Combine all queries from the three files
-        all_queries = []
-        for file_path in file_paths:
-            with open(file_path, 'r') as f:
-                for line in f:
-                    data = json.loads(line.strip())
-                    all_queries.append(data)
-        
-        # Shuffle queries and select the random queries_count
-        random.shuffle(all_queries)
-        selected_queries = all_queries[:queries_count]
-        
-        # Save the random queries to a JSONL file for future use
-        print(f"Saving random queries to {saved_queries_path}")
-        with open(saved_queries_path, 'w') as f:
-            for query in selected_queries:
-                json.dump(query, f)
-                f.write("\n")
+    print(f"Loading saved queries from {saved_queries_path}")
+    with open(saved_queries_path, 'r') as f:
+        selected_queries = [json.loads(line) for line in f]
     
     # Load or create tokenized chunks
     if tokenized_chunks_file and os.path.exists(tokenized_chunks_file):
@@ -260,6 +240,5 @@ output_dir = "results"
 tokenized_chunks_file = "tokenized_chunks.jsonl"
 saved_queries_path = "saved_random_queries.jsonl"
 top_n = 2500
-queries_count = 4
 
-main(file_paths, tables_file_path, output_dir, top_n, queries_count, saved_queries_path, tokenized_chunks_file)
+main(file_paths, tables_file_path, output_dir, top_n, saved_queries_path, tokenized_chunks_file)
