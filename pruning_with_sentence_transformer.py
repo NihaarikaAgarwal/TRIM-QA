@@ -4,6 +4,7 @@ import argparse
 import os
 import jsonlines
 import time
+import torch  # Adding torch import at top level
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
@@ -79,28 +80,79 @@ def extract_table_ids_from_test_jsonl(file_path='test.jsonl'):
     return table_info, table_ids
 
 class SentenceTransformerPruner:
-    """
-    A simple class that uses sentence transformers to prune chunks based on
-    query similarity. This is separate from your custom URS and weak supervision approach.
-    """
-    def __init__(self, model_name='all-MiniLM-L6-v2'):
-        self.model = SentenceTransformer(model_name)
-        
+    def __init__(self, model_name='all-MiniLM-L6-v2', batch_size=32):
+        self.batch_size = batch_size
+        # Try to use GPU with specific configurations for A100
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Enable TF32 for better performance on A100
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                # Set device to CUDA
+                self.device = torch.device("cuda")
+                print(f"Using GPU: {torch.cuda.get_device_name()}")
+                print(f"CUDA Version: {torch.version.cuda}")
+                # Initialize model on GPU
+                self.model = SentenceTransformer(model_name).to(self.device)
+                # Enable parallel processing if multiple GPUs are available
+                if torch.cuda.device_count() > 1:
+                    print(f"Using {torch.cuda.device_count()} GPUs!")
+                    self.model = torch.nn.DataParallel(self.model)
+            else:
+                print("No GPU available, falling back to CPU")
+                self.device = torch.device("cpu")
+                self.model = SentenceTransformer(model_name)
+        except Exception as e:
+            print(f"Error initializing GPU: {e}")
+            print("Falling back to CPU")
+            self.device = torch.device("cpu")
+            self.model = SentenceTransformer(model_name)
+
     def get_embeddings(self, texts):
-        """Get embeddings for a list of texts."""
-        return self.model.encode(texts)
-    
+        """Get embeddings for a list of texts using batched processing."""
+        embeddings = []
+        # Process in batches for memory efficiency
+        for i in range(0, len(texts), self.batch_size):
+            batch_texts = texts[i:i + self.batch_size]
+            with torch.no_grad():  # Disable gradient calculation for inference
+                batch_embeddings = self.model.encode(
+                    batch_texts,
+                    convert_to_tensor=True,
+                    show_progress_bar=False,
+                    device=self.device
+                )
+                # Move embeddings to CPU if they were on GPU
+                if self.device.type == "cuda":
+                    batch_embeddings = batch_embeddings.cpu()
+                embeddings.append(batch_embeddings)
+        
+        # Concatenate all batches
+        if self.device.type == "cuda":
+            return torch.cat(embeddings).numpy()
+        return torch.cat(embeddings).numpy()
+
     def compute_similarity_scores(self, chunk_texts, query):
-        """Compute similarity scores between chunks and query."""
-        # Get embeddings
+        """Compute similarity scores between chunks and query using GPU acceleration."""
+        # Get query embedding
+        with torch.no_grad():
+            query_embedding = self.model.encode(
+                [query],
+                convert_to_tensor=True,
+                show_progress_bar=False,
+                device=self.device
+            )
+            if self.device.type == "cuda":
+                query_embedding = query_embedding.cpu()
+            query_embedding = query_embedding.numpy()
+
+        # Get chunk embeddings in batches
         chunk_embeddings = self.get_embeddings(chunk_texts)
-        query_embedding = self.get_embeddings([query])[0]
         
         # Compute cosine similarity
-        scores = cosine_similarity([query_embedding], chunk_embeddings)[0]
-        
+        scores = cosine_similarity(query_embedding, chunk_embeddings)[0]
         return scores
-    
+
     def remove_redundant_chunks(self, chunks, scores, similarity_threshold=0.8):
         """Remove redundant chunks while preserving the most relevant ones."""
         # Sort chunks by score in descending order
@@ -172,84 +224,338 @@ class SentenceTransformerPruner:
         
         return selected_chunks
 
-def main():
-    parser = argparse.ArgumentParser(description='Prune chunks using sentence transformers')
-    parser.add_argument('input_file', help='Path to input JSON file with chunks')
-    parser.add_argument('output_file', help='Path to output JSON file for pruned chunks')
-    parser.add_argument('--query', required=True, help='Question query for pruning')
-    parser.add_argument('--relevance-threshold', type=float, default=0.5, 
-                        help='Minimum relevance score to keep a chunk (default: 0.5)')
-    parser.add_argument('--similarity-threshold', type=float, default=0.8, 
-                        help='Similarity threshold for redundancy removal (default: 0.8)')
-    parser.add_argument('--top-k', type=int, default=None, 
-                        help='Maximum number of chunks to return (default: no limit)')
-    parser.add_argument('--model', default='all-MiniLM-L6-v2',
-                        help='Sentence transformer model (default: all-MiniLM-L6-v2)')
+def process_top_queries(query_range, top_n_tables, pruner, relevance_threshold=0.5, similarity_threshold=0.8):
+    """Process queries from Top-150-Queries directory using sentence transformer"""
+    try:
+        # Create results directory structure
+        base_dir = "pruning_results_st"  # Changed to differentiate from original pruning results
+        for subdir in ['original', 'pruned', 'merged', 'reports']:
+            os.makedirs(os.path.join(base_dir, subdir), exist_ok=True)
+        
+        # Load queries from the specified range
+        queries_dir = "Top-150-Quries"
+        
+        # Get the specific query files based on query numbers
+        selected_files = []
+        for query_num in range(query_range[0], query_range[1] + 1):
+            query_file = f"query{query_num}_TopTables.csv"
+            if os.path.exists(os.path.join(queries_dir, query_file)):
+                selected_files.append(query_file)
+            else:
+                print(f"Warning: Query file {query_file} not found")
+        
+        if not selected_files:
+            print(f"No query files found for range {query_range[0]} to {query_range[1]}")
+            return []
+        
+        print(f"\nProcessing queries {query_range[0]} to {query_range[1]}")
+        print(f"Found {len(selected_files)} query files")
+        print(f"Will process top {top_n_tables} tables for each query")
+        
+        results = []
+        
+        for query_file in selected_files:
+            query_num = query_file.split('_')[0].replace('query', '')
+            print(f"\nProcessing Query {query_num}...")
+            
+            # Read the query CSV file
+            query_df = pd.read_csv(os.path.join(queries_dir, query_file))
+            
+            # Get the query text (same for all rows)
+            query_text = query_df['query'].iloc[0]
+            target_table = query_df['target table'].iloc[0]
+            target_answer = query_df['target answer'].iloc[0]
+            
+            print(f"Query: {query_text}")
+            print(f"Target table: {target_table}")
+            print(f"Target answer: {target_answer}")
+            
+            # Take exactly top N tables
+            top_tables = query_df.head(top_n_tables)
+            print(f"Processing top {len(top_tables)} tables for this query")
+            
+            for idx, row in top_tables.iterrows():
+                table_id = row['top tables']
+                print(f"\nProcessing table {idx + 1}/{top_n_tables}: {table_id}")
+                
+                # Load chunks for this table
+                chunks = []
+                with jsonlines.open('chunks.json', 'r') as reader:
+                    for chunk in reader:
+                        if ('metadata' in chunk and 
+                            'table_name' in chunk['metadata'] and 
+                            chunk['metadata']['table_name'] == table_id and
+                            'chunk_type' in chunk['metadata'] and 
+                            chunk['metadata']['chunk_type'] != 'table'):  # Skip table chunks
+                            chunks.append(chunk)
+                
+                if not chunks:
+                    print(f"No valid chunks found for table {table_id}")
+                    continue
+                
+                print(f"Found {len(chunks)} chunks for table {table_id}")
+                
+                # Prune chunks using sentence transformer
+                pruned_chunks_with_scores = pruner.prune_chunks(
+                    chunks,
+                    query_text,
+                    relevance_threshold=relevance_threshold,
+                    similarity_threshold=similarity_threshold
+                )
+                
+                if not pruned_chunks_with_scores:
+                    print(f"No chunks remained after pruning for table {table_id}")
+                    continue
+                
+                pruned_chunks = [chunk for chunk, _ in pruned_chunks_with_scores]
+                scores = [score for _, score in pruned_chunks_with_scores]
+                
+                # Create safe filenames
+                safe_query = "".join(c if c.isalnum() else "_" for c in query_text[:30])
+                
+                # Save original chunks
+                original_file = os.path.join(base_dir, "original", f"{query_num}_{table_id}_original.json")
+                with open(original_file, 'w') as f:
+                    json.dump(chunks, f, indent=2)
+                
+                # Save pruned chunks
+                pruned_file = os.path.join(base_dir, "pruned", f"{query_num}_{table_id}_pruned.json")
+                with open(pruned_file, 'w') as f:
+                    json.dump(pruned_chunks, f, indent=2)
+                
+                # Create merged version (combining similar chunks)
+                merged_chunks = []
+                chunk_groups = {}
+                
+                for chunk in pruned_chunks:
+                    chunk_type = chunk['metadata'].get('chunk_type', '')
+                    if chunk_type in ['row', 'col']:
+                        key = f"{chunk_type}_{chunk['metadata'].get(f'{chunk_type}_id', '')}"
+                        if key not in chunk_groups:
+                            chunk_groups[key] = []
+                        chunk_groups[key].append(chunk)
+                    else:
+                        merged_chunks.append(chunk)
+                
+                # Merge chunks in each group
+                for group_chunks in chunk_groups.values():
+                    if group_chunks:
+                        merged_text = " ".join([c['text'] for c in group_chunks])
+                        merged_score = np.mean([c.get('score', 0) for c in group_chunks])
+                        merged_chunks.append({
+                            'text': merged_text,
+                            'score': merged_score,
+                            'metadata': {
+                                **group_chunks[0]['metadata'],
+                                'merged_from': len(group_chunks)
+                            }
+                        })
+                
+                # Save merged chunks
+                merged_file = os.path.join(base_dir, "merged", f"{query_num}_{table_id}_merged.json")
+                with open(merged_file, 'w') as f:
+                    json.dump(merged_chunks, f, indent=2)
+                
+                # Generate HTML report
+                df_data = []
+                for chunk, score in zip(pruned_chunks, scores):
+                    df_data.append({
+                        'chunk_id': chunk['metadata'].get('chunk_id', 'unknown'),
+                        'chunk_type': chunk['metadata'].get('chunk_type', 'unknown'),
+                        'text': chunk['text'],
+                        'score': score
+                    })
+                
+                df = pd.DataFrame(df_data)
+                
+                html_file = os.path.join(base_dir, "reports", f"{query_num}_{table_id}_report.html")
+                
+                html_content = f"""
+                <html>
+                <head>
+                    <title>Sentence Transformer Pruning Report - Query {query_num}</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                        h1, h2 {{ color: #333; }}
+                        .stats {{ margin: 20px 0; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }}
+                        table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                        th {{ background-color: #f2f2f2; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>Sentence Transformer Pruning Report</h1>
+                    <div class="stats">
+                        <h2>Query Information</h2>
+                        <p><strong>Query:</strong> {query_text}</p>
+                        <p><strong>Table ID:</strong> {table_id}</p>
+                        <p><strong>Target Table:</strong> {target_table}</p>
+                        <p><strong>Target Answer:</strong> {target_answer}</p>
+                        <h2>Pruning Statistics</h2>
+                        <p>Original chunks: {len(chunks)}</p>
+                        <p>Pruned chunks: {len(pruned_chunks)}</p>
+                        <p>Reduction: {((1 - len(pruned_chunks)/len(chunks)) * 100):.1f}%</p>
+                    </div>
+                    {df.to_html()}
+                </body>
+                </html>
+                """
+                
+                with open(html_file, 'w') as f:
+                    f.write(html_content)
+                
+                # Add to results
+                results.append({
+                    'query_num': query_num,
+                    'question': query_text,
+                    'table_id': table_id,
+                    'target_table': target_table,
+                    'original_chunks': len(chunks),
+                    'pruned_chunks': len(pruned_chunks),
+                    'reduction_percentage': (1 - len(pruned_chunks)/len(chunks)) * 100,
+                    'avg_score': np.mean(scores)
+                })
+        
+        # Save summary for all results
+        if results:
+            summary_df = pd.DataFrame(results)
+            summary_path = os.path.join(base_dir, f"summary_queries_{query_range[0]}-{query_range[1]}.csv")
+            summary_df.to_csv(summary_path, index=False)
+            print(f"\nSummary saved to {summary_path}")
+        
+        return results
     
-    args = parser.parse_args()
+    except Exception as e:
+        print(f"Error processing queries: {e}")
+        return []
+
+def main():
+    print("\n=== TRIM-QA Sentence Transformer Pruning ===")
+    print("=" * 45)
+    
+    # Get query range from user
+    while True:
+        try:
+            print("\nEnter query range (1-150, format: start end):")
+            start, end = map(int, input("> ").split())
+            if 1 <= start <= end <= 150:
+                break
+            print("Invalid range. Start must be <= end, and both must be between 1 and 150.")
+        except ValueError:
+            print("Please enter two numbers separated by space (e.g., '1 5')")
+    
+    # Get number of top tables to process
+    while True:
+        try:
+            print("\nEnter number of top tables to process for each query:")
+            top_n = int(input("> "))
+            if top_n > 0:
+                break
+            print("Please enter a positive number.")
+        except ValueError:
+            print("Please enter a valid number.")
+    
+    # Get relevance threshold
+    while True:
+        try:
+            print("\nEnter relevance threshold (0.0-1.0, default: 0.5):")
+            print("This determines how similar a chunk must be to the query to be kept.")
+            threshold_input = input("> ").strip()
+            if not threshold_input:  # Use default if empty
+                relevance_threshold = 0.5
+                break
+            relevance_threshold = float(threshold_input)
+            if 0 <= relevance_threshold <= 1:
+                break
+            print("Threshold must be between 0 and 1.")
+        except ValueError:
+            print("Please enter a valid number between 0 and 1.")
+    
+    # Get similarity threshold for redundancy removal
+    while True:
+        try:
+            print("\nEnter similarity threshold for redundancy removal (0.0-1.0, default: 0.8):")
+            print("Higher values mean chunks must be more similar to be considered redundant.")
+            threshold_input = input("> ").strip()
+            if not threshold_input:  # Use default if empty
+                similarity_threshold = 0.8
+                break
+            similarity_threshold = float(threshold_input)
+            if 0 <= similarity_threshold <= 1:
+                break
+            print("Threshold must be between 0 and 1.")
+        except ValueError:
+            print("Please enter a valid number between 0 and 1.")
+    
+    # Choose model
+    print("\nSelect sentence transformer model:")
+    print("1. all-MiniLM-L6-v2 (default, faster)")
+    print("2. all-mpnet-base-v2 (more accurate but slower)")
+    print("3. paraphrase-multilingual-MiniLM-L12-v2 (multilingual support)")
+    while True:
+        try:
+            choice = input("\nEnter choice (1-3) or press Enter for default: ").strip()
+            if not choice:  # Use default if empty
+                model_name = 'all-MiniLM-L6-v2'
+                break
+            choice = int(choice)
+            if choice == 1:
+                model_name = 'all-MiniLM-L6-v2'
+                break
+            elif choice == 2:
+                model_name = 'all-mpnet-base-v2'
+                break
+            elif choice == 3:
+                model_name = 'paraphrase-multilingual-MiniLM-L12-v2'
+                break
+            print("Please enter a number between 1 and 3.")
+        except ValueError:
+            print("Please enter a valid number between 1 and 3.")
+    
+    # Show selected configuration
+    print("\n=== Configuration Summary ===")
+    print(f"Query Range: {start}-{end}")
+    print(f"Top Tables per Query: {top_n}")
+    print(f"Relevance Threshold: {relevance_threshold}")
+    print(f"Similarity Threshold: {similarity_threshold}")
+    print(f"Model: {model_name}")
+    
+    # Confirm and proceed
+    while True:
+        confirm = input("\nProceed with pruning? (y/n): ").lower()
+        if confirm in ['y', 'yes']:
+            break
+        elif confirm in ['n', 'no']:
+            print("Pruning cancelled.")
+            return
+        else:
+            print("Please enter 'y' or 'n'.")
     
     start_time = time.time()
     
-    # Load chunks
-    print(f"Loading chunks from {args.input_file}...")
-    chunks = load_chunks(args.input_file)
-    print(f"Loaded {len(chunks)} chunks")
+    # Create pruner instance
+    print(f"\nInitializing sentence transformer with model: {model_name}")
+    pruner = SentenceTransformerPruner(model_name=model_name)
     
-    # Create pruner
-    pruner = SentenceTransformerPruner(model_name=args.model)
-    
-    # Prune chunks
-    print(f"Pruning chunks with query: '{args.query}'...")
-    pruned_chunks_with_scores = pruner.prune_chunks(
-        chunks, 
-        args.query, 
-        relevance_threshold=args.relevance_threshold,
-        similarity_threshold=args.similarity_threshold,
-        top_k=args.top_k
+    # Process queries
+    results = process_top_queries(
+        query_range=(start, end),
+        top_n_tables=top_n,
+        pruner=pruner,
+        relevance_threshold=relevance_threshold,
+        similarity_threshold=similarity_threshold
     )
     
-    pruned_chunks = [chunk for chunk, _ in pruned_chunks_with_scores]
-    scores = [score for _, score in pruned_chunks_with_scores]
-    
-    print(f"Pruned to {len(pruned_chunks)} chunks")
-    
-    # Save pruned chunks
-    print(f"Saving pruned chunks to {args.output_file}...")
-    with open(args.output_file, 'w') as f:
-        for chunk in pruned_chunks:
-            f.write(json.dumps(chunk) + '\n')
-    
-    # Save detailed results with scores
-    detailed_output_file = args.output_file + ".detailed.json"
-    with open(detailed_output_file, 'w') as f:
-        results = []
-        for (chunk, score) in pruned_chunks_with_scores:
-            result = {
-                "chunk": chunk,
-                "relevance_score": float(score)
-            }
-            results.append(result)
-        json.dump(results, f, indent=2)
-    
-    # Create summary DataFrame
-    if pruned_chunks:
-        df_data = []
-        for (chunk, score) in pruned_chunks_with_scores:
-            df_data.append({
-                'chunk_id': chunk['metadata'].get('chunk_id', 'unknown'),
-                'chunk_type': chunk['metadata'].get('chunk_type', 'unknown'),
-                'table_name': chunk['metadata'].get('table_name', 'unknown'),
-                'score': score,
-                'text': chunk['text'][:100] + '...' if len(chunk['text']) > 100 else chunk['text']
-            })
-        
-        df = pd.DataFrame(df_data)
-        summary_file = args.output_file + ".summary.csv"
-        df.to_csv(summary_file, index=False)
-        print(f"Saved summary to {summary_file}")
+    if results:
+        print("\n===== Final Summary =====")
+        print(f"Processed {len(results)} table-query pairs")
+        avg_reduction = sum(r['reduction_percentage'] for r in results) / len(results)
+        avg_score = sum(r['avg_score'] for r in results) / len(results)
+        print(f"Average chunk reduction: {avg_reduction:.1f}%")
+        print(f"Average relevance score: {avg_score:.3f}")
     
     elapsed_time = time.time() - start_time
-    print(f"Done! Elapsed time: {elapsed_time:.2f} seconds")
+    print(f"\nTotal processing time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()

@@ -6,6 +6,7 @@ tables.jsonl
 tapas_nq_data/
 venv/
 pruning_results/
+pruning_results_st/
 pruned_chunks/
 Top-150-Quries/
 pruned-chunks-json/

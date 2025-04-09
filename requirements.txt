@@ -2,8 +2,10 @@ nltk>=3.6.7
 tqdm>=4.64.1
 rank-bm25>=0.2.2
 numpy>=1.19.5
-torch>=1.10.2
+torch<=1.9.1  # Updated for Python 3.6 compatibility
 transformers
 jsonlines
 pandas
 jinja2
+sentence-transformers
+scikit-learn
