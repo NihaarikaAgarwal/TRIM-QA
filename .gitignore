@@ -1,8 +1,7 @@
-pruning_results/
-Top-150-Quries/
+Top-150-Queries.zip
 chunks.json
-pruned-chunks-json/
-venv/
+chunks.zip
+pruningTestData/
 tables.jsonl
-tokenized_chunks.jsonl
-NQ-Dataset/
+tapas_nq_data/
+venv/
