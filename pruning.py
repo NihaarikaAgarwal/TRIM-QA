@@ -158,16 +158,17 @@ class CombinedModule(nn.Module):
 # It filters out chunks with scores below a certain threshold.
 #--------------------------------------------------------------------------#    
     
-def prune_chunks(chunks, scores, threshold=0.6): # here this threshold can be tuned
+def prune_chunks(chunks, scores, threshold=0.6):
     """
     chunks: list of chunk dicts.
     scores: list of combined relevance scores corresponding to each chunk.
-    threshold: minimum score to keep a chunk.
+    threshold: minimum score to keep a chunk (default 0.6).
     Returns a list of pruned chunks.
     """
     pruned = []
     for chunk, score in zip(chunks, scores):
-        if score >= threshold:
+        if score >= threshold:  # Only keep chunks with scores >= threshold
+            chunk['score'] = score  # Add the score to the chunk for reference
             pruned.append(chunk)
     return pruned
 
@@ -185,7 +186,7 @@ def list_available_tables(limit=10):
     return tables
 
 # Convert chunks to pandas DataFrame for visualization
-def chunks_to_dataframe(chunks, is_pruned_chunks=False, normalized_scores=None):
+def chunks_to_dataframe(chunks, is_pruned_chunks=False, normalized_scores=None, threshold=0.6):
     """Convert chunks to a pandas DataFrame for better visualization."""
     data = []
     for i, chunk in enumerate(chunks):
@@ -199,7 +200,7 @@ def chunks_to_dataframe(chunks, is_pruned_chunks=False, normalized_scores=None):
         
         # Add score and pruning status
         score = chunk.get('score', normalized_scores[i] if normalized_scores else 0.0)
-        is_pruned = "Yes" if is_pruned_chunks else "No"
+        is_pruned = "Yes" if score < threshold else "No"  # Use passed threshold
         
         data.append({
             'chunk_id': chunk_id,
