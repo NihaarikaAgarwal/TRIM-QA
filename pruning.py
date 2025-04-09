@@ -352,32 +352,49 @@ def process_top_queries(query_range, top_n_tables):
         
         # Load queries from the specified range
         queries_dir = "Top-150-Quries"
-        query_files = sorted([f for f in os.listdir(queries_dir) if f.startswith("query") and f.endswith(".csv")])
-        start_idx = max(0, query_range[0] - 1)
-        end_idx = min(len(query_files), query_range[1])
         
-        selected_files = query_files[start_idx:end_idx]
+        # Get the specific query files based on query numbers
+        selected_files = []
+        for query_num in range(query_range[0], query_range[1] + 1):  # Include end query number
+            query_file = f"query{query_num}_TopTables.csv"
+            if os.path.exists(os.path.join(queries_dir, query_file)):
+                selected_files.append(query_file)
+            else:
+                print(f"Warning: Query file {query_file} not found")
+        
+        if not selected_files:
+            print(f"No query files found for range {query_range[0]} to {query_range[1]}")
+            return []
+        
+        print(f"\nProcessing queries {query_range[0]} to {query_range[1]}")
+        print(f"Found {len(selected_files)} query files")
+        print(f"Will process top {top_n_tables} tables for each query")
+        
         results = []
         
         for query_file in selected_files:
-            print(f"\nProcessing {query_file}...")
+            query_num = query_file.split('_')[0].replace('query', '')
+            print(f"\nProcessing Query {query_num}...")
+            
+            # Read the query CSV file
             query_df = pd.read_csv(os.path.join(queries_dir, query_file))
             
-            # Get the query text from the first row's 'query' column
-            query_text = query_df['query'].iloc[0] if 'query' in query_df.columns else ''
+            # Get the query text (same for all rows)
+            query_text = query_df['query'].iloc[0]
+            target_table = query_df['target table'].iloc[0]
+            target_answer = query_df['target answer'].iloc[0]
+            
             print(f"Query: {query_text}")
+            print(f"Target table: {target_table}")
+            print(f"Target answer: {target_answer}")
             
-            # Process top N tables for this query
-            # Use 'top tables' column which contains table IDs
-            if 'top tables' not in query_df.columns:
-                print(f"Warning: No 'top tables' column found in {query_file}")
-                continue
-                
+            # Take exactly top N tables
             top_tables = query_df.head(top_n_tables)
+            print(f"Processing top {len(top_tables)} tables for this query")
             
-            for _, row in top_tables.iterrows():
+            for idx, row in top_tables.iterrows():
                 table_id = row['top tables']
-                print(f"\nProcessing table {table_id}")
+                print(f"\nProcessing table {idx + 1}/{top_n_tables}: {table_id}")
                 
                 # Load chunks for this table
                 chunks = []
@@ -398,7 +415,8 @@ def process_top_queries(query_range, top_n_tables):
                 query_item = {
                     'question': query_text,
                     'table_id': table_id,
-                    'answer': row.get('target answer', [])  # Use target answer if available
+                    'target_table': target_table,
+                    'answer': target_answer
                 }
                 
                 # Process query
@@ -412,19 +430,38 @@ def process_top_queries(query_range, top_n_tables):
                     final_threshold
                 )
                 
-                # Create merged version of pruned chunks
-                pruned_chunks_file = os.path.join(base_dir, "pruned", f"pruned_chunks_{table_id}_{query_text[:30]}.json")
-                if os.path.exists(pruned_chunks_file):
-                    with open(pruned_chunks_file, 'r') as f:
-                        pruned_chunks = json.load(f)
-                        merged_chunks = merge_pruned_chunks(pruned_chunks)
-                        
-                        # Save merged chunks
-                        merged_file = os.path.join(base_dir, "merged", f"{table_id}_{query_text[:30]}_merged.json")
-                        with open(merged_file, 'w') as f:
-                            json.dump(merged_chunks, f, indent=2)
-                
-                results.append(result)
+                # Save results in pruning_results directory
+                if result:
+                    # Create merged version of pruned chunks
+                    pruned_chunks_file = os.path.join(base_dir, "pruned", 
+                                                    f"{query_num}_{table_id}_pruned.json")
+                    if os.path.exists(pruned_chunks_file):
+                        with open(pruned_chunks_file, 'r') as f:
+                            pruned_chunks = json.load(f)
+                            merged_chunks = merge_pruned_chunks(pruned_chunks)
+                            
+                            # Save merged chunks
+                            merged_file = os.path.join(base_dir, "merged", 
+                                                     f"{query_num}_{table_id}_merged.json")
+                            with open(merged_file, 'w') as f:
+                                json.dump(merged_chunks, f, indent=2)
+                    
+                    results.append(result)
+        
+        # Save summary for this batch
+        if results:
+            summary_df = pd.DataFrame([{
+                'query_num': r['question'],
+                'table_id': r['table_id'],
+                'target_table': r['target_table'],
+                'original_chunks': r['original_chunks'],
+                'pruned_chunks': r['pruned_chunks'],
+                'reduction_percentage': r['reduction_percentage']
+            } for r in results])
+            
+            summary_path = os.path.join(base_dir, f"summary_queries_{query_range[0]}-{query_range[1]}.csv")
+            summary_df.to_csv(summary_path, index=False)
+            print(f"\nSummary saved to {summary_path}")
         
         return results
     
@@ -535,37 +572,31 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     safe_question = "".join(c if c.isalnum() else "_" for c in question[:20])
     output_filename = f"pruned_chunks_{table_id}_{safe_question}.json"
     
-    # Save pruned chunks
-    output_dir = "pruned_chunks"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, output_filename)
-    
-    with open(output_path, 'w') as f:
+    # Save pruned chunks in pruning_results/pruned directory
+    pruned_chunks_file = os.path.join("pruning_results", "pruned", output_filename)
+    os.makedirs(os.path.dirname(pruned_chunks_file), exist_ok=True)
+    with open(pruned_chunks_file, 'w') as f:
         json.dump(pruned_chunks, f, indent=2)
     
     print(f"Original chunks: {len(chunks)}, Pruned chunks: {len(pruned_chunks)}")
-    print(f"Saved pruned chunks to {output_path}")
+    print(f"Saved pruned chunks to {pruned_chunks_file}")
     
     # Create and save DataFrames for visualization
     print("Converting chunks to DataFrames for visualization...")
     
-    # Convert original chunks to DataFrame
+    # Convert chunks to DataFrames
     original_df = chunks_to_dataframe(chunks)
-    
-    # Add score columns to the original DataFrame
     original_df['raw_score'] = final_scores
     original_df['normalized_score'] = normalized_scores
-    
-    # Convert pruned chunks to DataFrame
     pruned_df = chunks_to_dataframe(pruned_chunks)
     
-    # Save DataFrames to CSV
-    csv_dir = "pruning_results"
-    os.makedirs(csv_dir, exist_ok=True)
+    # Save DataFrames to CSV in pruning_results/original and pruning_results/pruned
+    csv_base = os.path.join("pruning_results")
+    original_csv = os.path.join(csv_base, "original", f"{table_id}_{safe_question}_original.csv")
+    pruned_csv = os.path.join(csv_base, "pruned", f"{table_id}_{safe_question}_pruned.csv")
     
-    csv_base = os.path.join(csv_dir, f"{table_id}_{safe_question}")
-    original_csv = f"{csv_base}_original.csv"
-    pruned_csv = f"{csv_base}_pruned.csv"
+    os.makedirs(os.path.dirname(original_csv), exist_ok=True)
+    os.makedirs(os.path.dirname(pruned_csv), exist_ok=True)
     
     original_df.to_csv(original_csv, index=False)
     pruned_df.to_csv(pruned_csv, index=False)
@@ -573,8 +604,9 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     print(f"Saved original chunks DataFrame to {original_csv}")
     print(f"Saved pruned chunks DataFrame to {pruned_csv}")
     
-    # Generate a basic HTML report with pandas styling
-    html_file = f"{csv_base}_report.html"
+    # Generate HTML report in pruning_results/reports directory
+    html_file = os.path.join(csv_base, "reports", f"{table_id}_{safe_question}_report.html")
+    os.makedirs(os.path.dirname(html_file), exist_ok=True)
     
     try:
         # Create a styled DataFrame with conditional formatting for scores
@@ -681,7 +713,7 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
         'pruned_chunks': len(pruned_chunks),
         'reduction_percentage': (1 - len(pruned_chunks)/len(chunks)) * 100 if len(chunks) > 0 else 0,
         'threshold_results': threshold_results,
-        'output_path': output_path,
+        'output_path': pruned_chunks_file,
         'html_report': html_file
     }
 
