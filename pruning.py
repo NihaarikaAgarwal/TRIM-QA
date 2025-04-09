@@ -289,6 +289,149 @@ def extract_table_ids_from_test_jsonl():
     
     return table_info, table_ids
 
+def merge_pruned_chunks(pruned_chunks):
+    """Merge pruned chunks that belong to the same row/column"""
+    merged = []
+    row_chunks = {}
+    col_chunks = {}
+    
+    for chunk in pruned_chunks:
+        chunk_type = chunk['metadata'].get('chunk_type', '')
+        
+        if chunk_type == 'row':
+            row_id = chunk['metadata'].get('row_id', '')
+            if row_id not in row_chunks:
+                row_chunks[row_id] = []
+            row_chunks[row_id].append(chunk)
+        elif chunk_type == 'col':
+            col_id = chunk['metadata'].get('col_id', '')
+            if col_id not in col_chunks:
+                col_chunks[col_id] = []
+            col_chunks[col_id].append(chunk)
+        else:
+            # Keep non-row/col chunks as is
+            merged.append(chunk)
+    
+    # Merge row chunks
+    for row_id, chunks in row_chunks.items():
+        merged_text = " ".join([str(c['text']) for c in chunks])
+        merged_score = sum([c.get('score', 0) for c in chunks]) / len(chunks)
+        merged.append({
+            'text': merged_text,
+            'score': merged_score,
+            'metadata': {
+                'chunk_type': 'merged_row',
+                'row_id': row_id,
+                'original_chunks': len(chunks)
+            }
+        })
+    
+    # Merge column chunks
+    for col_id, chunks in col_chunks.items():
+        merged_text = " ".join([str(c['text']) for c in chunks])
+        merged_score = sum([c.get('score', 0) for c in chunks]) / len(chunks)
+        merged.append({
+            'text': merged_text,
+            'score': merged_score,
+            'metadata': {
+                'chunk_type': 'merged_col',
+                'col_id': col_id,
+                'original_chunks': len(chunks)
+            }
+        })
+    
+    return merged
+
+def process_top_queries(query_range, top_n_tables):
+    """Process queries from Top-150-Queries directory"""
+    try:
+        # Create results directory structure
+        base_dir = "pruning_results"
+        for subdir in ['original', 'pruned', 'merged', 'reports']:
+            os.makedirs(os.path.join(base_dir, subdir), exist_ok=True)
+        
+        # Load queries from the specified range
+        queries_dir = "Top-150-Quries"
+        query_files = sorted([f for f in os.listdir(queries_dir) if f.startswith("query") and f.endswith(".csv")])
+        start_idx = max(0, query_range[0] - 1)
+        end_idx = min(len(query_files), query_range[1])
+        
+        selected_files = query_files[start_idx:end_idx]
+        results = []
+        
+        for query_file in selected_files:
+            print(f"\nProcessing {query_file}...")
+            query_df = pd.read_csv(os.path.join(queries_dir, query_file))
+            
+            # Get the query text from the first row's 'query' column
+            query_text = query_df['query'].iloc[0] if 'query' in query_df.columns else ''
+            print(f"Query: {query_text}")
+            
+            # Process top N tables for this query
+            # Use 'top tables' column which contains table IDs
+            if 'top tables' not in query_df.columns:
+                print(f"Warning: No 'top tables' column found in {query_file}")
+                continue
+                
+            top_tables = query_df.head(top_n_tables)
+            
+            for _, row in top_tables.iterrows():
+                table_id = row['top tables']
+                print(f"\nProcessing table {table_id}")
+                
+                # Load chunks for this table
+                chunks = []
+                with jsonlines.open('chunks.json', 'r') as reader:
+                    for chunk in reader:
+                        if ('metadata' in chunk and 
+                            'table_name' in chunk['metadata'] and 
+                            chunk['metadata']['table_name'] == table_id and
+                            'chunk_type' in chunk['metadata'] and 
+                            chunk['metadata']['chunk_type'] != 'table'):  # Skip table chunks
+                            chunks.append(chunk)
+                
+                if not chunks:
+                    print(f"No valid chunks found for table {table_id}")
+                    continue
+                
+                # Create query item
+                query_item = {
+                    'question': query_text,
+                    'table_id': table_id,
+                    'answer': row.get('target answer', [])  # Use target answer if available
+                }
+                
+                # Process query
+                result = process_query(
+                    query_item,
+                    chunks,
+                    embedding_model,
+                    combined_model,
+                    tokenizer,
+                    thresholds,
+                    final_threshold
+                )
+                
+                # Create merged version of pruned chunks
+                pruned_chunks_file = os.path.join(base_dir, "pruned", f"pruned_chunks_{table_id}_{query_text[:30]}.json")
+                if os.path.exists(pruned_chunks_file):
+                    with open(pruned_chunks_file, 'r') as f:
+                        pruned_chunks = json.load(f)
+                        merged_chunks = merge_pruned_chunks(pruned_chunks)
+                        
+                        # Save merged chunks
+                        merged_file = os.path.join(base_dir, "merged", f"{table_id}_{query_text[:30]}_merged.json")
+                        with open(merged_file, 'w') as f:
+                            json.dump(merged_chunks, f, indent=2)
+                
+                results.append(result)
+        
+        return results
+    
+    except Exception as e:
+        print(f"Error processing queries: {e}")
+        return []
+
 # Process a single query and its associated table
 def process_query(query_item, chunks, embedding_model, combined_model, tokenizer, thresholds, final_threshold):
     """
@@ -544,254 +687,68 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
 
 # Main execution block
 if __name__ == "__main__":
-    # Check for command line arguments to determine run mode
-    run_mode = "interactive"
-    target_id = None
-    batch_process = False
+    print("TRIM-QA Pruning Script")
+    print("=" * 50)
     
-    if len(sys.argv) > 1:
-        if sys.argv[1].lower() == "batch":
-            run_mode = "batch"
-            batch_process = True
-        else:
-            run_mode = "specific"
-            target_id = sys.argv[1]
+    # Initialize models
+    hidden_dim = 768
+    model_name = "bert-base-uncased"
     
-    # Initialize models (only need to do this once)
-    hidden_dim = 768  # BERT/RoBERTa hidden dimension
-    model_name = "bert-base-uncased"  # or any other preferred model
-    
-    print("Loading tokenizer and models...")
-    start_time = time.time()
+    print("Loading models...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     embedding_model = EmbeddingModule(AutoModel.from_pretrained(model_name))
     combined_model = CombinedModule(hidden_dim)
-    print(f"Models loaded in {time.time() - start_time:.2f} seconds")
     
-    # Define thresholds for testing
+    # Define thresholds
     thresholds = [0.2, 0.3, 0.4, 0.5]
-    final_threshold = 0.6  # Use this threshold for saving pruned chunks
+    final_threshold = 0.6
     
-    # Process based on run mode
-    if run_mode == "batch" or run_mode == "specific":
-        # Load all test queries from the pruningTestData directory
-        test_queries = load_pruning_test_data()
-        
-        if not test_queries:
-            print("No test queries found in the pruningTestData directory. Exiting.")
-            exit(1)
-            
-        if run_mode == "specific" and target_id:
-            # Filter queries by target ID
-            test_queries = [q for q in test_queries if q['table_id'] == target_id]
-            if not test_queries:
-                print(f"No test queries found for table ID {target_id}. Exiting.")
-                exit(1)
-        
-        # Process all queries in batch mode
-        results = []
-        total_queries = len(test_queries)
-        
-        print(f"Processing {total_queries} queries in {'batch' if batch_process else 'specific'} mode")
-        print("-" * 80)
-        
-        for i, query_item in enumerate(test_queries):
-            print(f"\n[{i+1}/{total_queries}] Processing query for table {query_item['table_id']}")
-            
-            # Load chunks for this table ID
-            chunks = []
-            chunk_count = 0
-            matched_chunks = 0
-            
-            with jsonlines.open('chunks.json', 'r') as reader:
-                for chunk in reader:
-                    chunk_count += 1
-                    if chunk_count % 10000 == 0:
-                        print(f"  Processed {chunk_count} chunks, matched {matched_chunks} so far...")
-                    
-                    # Check if the chunk belongs to our target table
-                    if 'metadata' in chunk and 'table_name' in chunk['metadata'] and chunk['metadata']['table_name'] == query_item['table_id']:
-                        chunks.append(chunk)
-                        matched_chunks += 1
-            
-            if not chunks:
-                print(f"Warning: No chunks found for table ID {query_item['table_id']}. Skipping this query.")
-                continue
-                
-            print(f"Found {matched_chunks} chunks for table ID {query_item['table_id']}")
-            
-            # Process this query
-            result = process_query(
-                query_item, 
-                chunks,
-                embedding_model, 
-                combined_model, 
-                tokenizer, 
-                thresholds, 
-                final_threshold
-            )
-            
-            results.append(result)
-            print("-" * 80)
-        
-        # Generate summary report
-        print("\n===== SUMMARY REPORT =====")
-        print(f"Processed {len(results)}/{total_queries} queries")
-        
-        avg_reduction = sum(r['reduction_percentage'] for r in results) / len(results) if results else 0
+    # Get query range from user
+    while True:
+        try:
+            print("\nEnter query range (1-150, format: start end):")
+            start, end = map(int, input("> ").split())
+            if 1 <= start <= end <= 150:
+                break
+            print("Invalid range. Start must be <= end, and both must be between 1 and 150.")
+        except ValueError:
+            print("Please enter two numbers separated by space.")
+    
+    # Get number of top tables to process
+    while True:
+        try:
+            print("\nEnter number of top tables to process for each query:")
+            top_n = int(input("> "))
+            if top_n > 0:
+                break
+            print("Please enter a positive number.")
+        except ValueError:
+            print("Please enter a valid number.")
+    
+    # Process queries
+    print(f"\nProcessing queries {start}-{end} with top {top_n} tables each...")
+    results = process_top_queries((start, end), top_n)
+    
+    # Generate final summary
+    if results:
+        print("\n===== Final Summary =====")
+        print(f"Processed {len(results)} table-query pairs")
+        avg_reduction = sum(r['reduction_percentage'] for r in results) / len(results)
         print(f"Average chunk reduction: {avg_reduction:.1f}%")
         
         # Save summary to CSV
         summary_df = pd.DataFrame([{
-            'question': r['question'],
+            'query': r['question'],
             'table_id': r['table_id'],
             'original_chunks': r['original_chunks'],
             'pruned_chunks': r['pruned_chunks'],
-            'reduction_percentage': r['reduction_percentage'],
-            'output_path': r['output_path']
+            'reduction_percentage': r['reduction_percentage']
         } for r in results])
         
-        summary_path = "pruning_summary_report.csv"
+        summary_path = "pruning_results/summary.csv"
         summary_df.to_csv(summary_path, index=False)
-        print(f"Summary report saved to {summary_path}")
-        
+        print(f"Summary saved to {summary_path}")
     else:
-        # Interactive mode - original behavior
-        # Extract table IDs from test.jsonl
-        test_table_info, test_table_ids = extract_table_ids_from_test_jsonl()
-        
-        if test_table_ids:
-            print("Available tables from test.jsonl:")
-            for i, table_info in enumerate(test_table_info):
-                print(f"{i+1}. {table_info['id']} - {table_info['title']}")
-                # Show questions if available
-                if table_info['questions']:
-                    print(f"   Questions: {', '.join(table_info['questions'][:2])}")
-                    if len(table_info['questions']) > 2:
-                        print(f"   ...and {len(table_info['questions'])-2} more questions")
-            
-            # Prompt user to select a table ID
-            print("\nEnter the table ID you want to use (or press Enter to use the first one):")
-            user_input = input("> ").strip()
-            
-            if user_input:
-                TARGET_TABLE_ID = user_input
-            else:
-                TARGET_TABLE_ID = test_table_ids[0]
-        else:
-            # Fall back to tables.jsonl if no tables found in test.jsonl
-            print("No tables found in test.jsonl. Showing available tables from tables.jsonl:")
-            tables = list_available_tables()
-            for i, table in enumerate(tables):
-                print(f"{i+1}. {table['id']} - {table['title']}")
-            
-            # Prompt user to select a table ID
-            print("\nEnter the table ID you want to use (or press Enter to use the first one):")
-            user_input = input("> ").strip()
-            
-            if user_input:
-                TARGET_TABLE_ID = user_input
-            else:
-                TARGET_TABLE_ID = tables[0]['id']
-        
-        print(f"\nStarting pruning process for table: {TARGET_TABLE_ID}")
-        print("-" * 80)
-        
-        # Read target table from tables.jsonl
-        print("Loading target table...")
-        target_table = None
-        with jsonlines.open('tables.jsonl', 'r') as reader:
-            for table in reader:
-                if table['tableId'] == TARGET_TABLE_ID:
-                    target_table = table
-                    break
-        
-        if not target_table:
-            print(f"Error: Could not find table with ID {TARGET_TABLE_ID}")
-            exit(1)
-        
-        print(f"Found target table: {target_table.get('documentTitle', 'Unknown title')}")
-        
-        # Get all table IDs (primary + alternatives) for the target table
-        target_table_ids = [TARGET_TABLE_ID]
-        if 'alternativeTableIds' in target_table and isinstance(target_table['alternativeTableIds'], list):
-            target_table_ids.extend(target_table['alternativeTableIds'])
-        
-        print(f"Looking for chunks with table IDs: {target_table_ids}")
-        
-        # Read chunks from chunks.json that match the target table
-        print("Loading and filtering chunks for target table...")
-        chunks = []
-        chunk_count = 0
-        matched_chunks = 0
-        
-        with jsonlines.open('chunks.json', 'r') as reader:
-            for chunk in reader:
-                chunk_count += 1
-                if chunk_count % 10000 == 0:
-                    print(f"  Processed {chunk_count} chunks, matched {matched_chunks} so far...")
-                
-                # Check if the chunk belongs to our target table or any of its alternative IDs
-                if 'metadata' in chunk and 'table_name' in chunk['metadata'] and chunk['metadata']['table_name'] in target_table_ids:
-                    chunks.append(chunk)
-                    matched_chunks += 1
-        
-        print(f"Found {matched_chunks} chunks that match table ID '{TARGET_TABLE_ID}' out of {chunk_count} total chunks")
-        
-        if not chunks:
-            print("Error: No matching chunks found for the target table")
-            exit(1)
-        
-        # Read questions for the target table from test.jsonl
-        print("Loading test questions for target table...")
-        test_items = []
-        with jsonlines.open('test.jsonl', 'r') as reader:
-            for item in reader:
-                # Check both tableId and alternativeTableIds fields
-                item_table_ids = [item.get('table_id', ''), item.get('tableId', '')]
-                
-                # Add alternativeTableIds if available
-                if 'alternativeTableIds' in item and isinstance(item['alternativeTableIds'], list):
-                    item_table_ids.extend(item['alternativeTableIds'])
-                # Check tableId from the table object if available
-                if 'table' in item and 'tableId' in item['table']:
-                    item_table_ids.append(item['table']['tableId'])
-                # Check alternativeTableIds from the table object if available
-                if 'table' in item and 'alternativeTableIds' in item['table'] and isinstance(item['table']['alternativeTableIds'], list):
-                    item_table_ids.extend(item['table']['alternativeTableIds'])
-                
-                # Check if any of the tableIds match our target
-                if TARGET_TABLE_ID in item_table_ids and 'questions' in item:
-                    for question in item['questions']:
-                        test_items.append({
-                            'question': question['originalText'],
-                            'table_id': TARGET_TABLE_ID,
-                            'answer': question['answer']['answerTexts']
-                        })
-        
-        print(f"Found {len(test_items)} test questions for target table")
-        
-        if not test_items:
-            # Create a sample question for demonstration if no test questions exist
-            test_items = [{
-                'question': f"What information is available about {target_table.get('documentTitle', 'this table')}?",
-                'table_id': TARGET_TABLE_ID,
-                'answer': ["Sample answer"]
-            }]
-            print(f"No test questions found. Created a sample question for demonstration.")
-        
-        # Process each question
-        for idx, item in enumerate(test_items):
-            print(f"\n[{idx+1}/{len(test_items)}] Processing question: {item['question']}")
-            result = process_query(
-                item, 
-                chunks, 
-                embedding_model, 
-                combined_model, 
-                tokenizer, 
-                thresholds,
-                final_threshold
-            )
-            print("-" * 80)
+        print("No results generated. Please check the errors above.")
 
 
