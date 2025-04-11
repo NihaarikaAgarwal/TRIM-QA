@@ -76,9 +76,16 @@ class EmbeddingModule(nn.Module):
 class URSModule(nn.Module):
     def __init__(self, hidden_dim):
         super(URSModule, self).__init__()
+        # Additional intermediate layers for richer feature extraction
+        self.fc1 = nn.Linear(hidden_dim, hidden_dim//2)
+        self.fc2 = nn.Linear(hidden_dim//2, hidden_dim//4)
+        
         # Fully-connected layers for mean and sigma computation
-        self.fc_mu = nn.Linear(hidden_dim, 1)
-        self.fc_sigma = nn.Linear(hidden_dim, 1)
+        self.fc_mu = nn.Linear(hidden_dim//4, 1) 
+        self.fc_sigma = nn.Linear(hidden_dim//4, 1)
+        
+        # Add dropout for regularization
+        self.dropout = nn.Dropout(0.2)
     
     def forward(self, h):
         """
@@ -86,14 +93,20 @@ class URSModule(nn.Module):
         Returns:
             eta_uns: Tensor of shape (batch_size, 1) representing relevance scores.
         """
+        # Pass through intermediate layers with ReLU activation
+        x = F.relu(self.fc1(h))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout(x)
+        
         # Compute mean and standard deviation
-        mu = self.fc_mu(h)   # shape: (batch_size, 1)
-        sigma = F.softplus(self.fc_sigma(h))  # ensures sigma > 0
+        mu = self.fc_mu(x)   # shape: (batch_size, 1)
+        sigma = F.softplus(self.fc_sigma(x))  # ensures sigma > 0
         
         # Sample s from normal distribution with mean mu and std sigma
-        s = torch.normal(mean=mu, std=sigma)  # this tweak is ours different from the CABINET
+        s = torch.normal(mean=mu, std=sigma)
         
-        # Reparameterization: z = mu + s * sigma --- latent variable
+        # Reparameterization: z = mu + s * sigma
         z = mu + s * sigma
         
         # Normalize with sigmoid
@@ -110,8 +123,17 @@ class URSModule(nn.Module):
 class WeakSupervisionModule(nn.Module):
     def __init__(self, hidden_dim):
         super(WeakSupervisionModule, self).__init__()
-        # Fully-connected layer for weak supervision score computation
-        self.fc = nn.Linear(hidden_dim, 1)
+        # Multiple fully-connected layers with decreasing dimensions
+        self.fc1 = nn.Linear(hidden_dim, hidden_dim//2)
+        self.fc2 = nn.Linear(hidden_dim//2, hidden_dim//4) 
+        self.fc3 = nn.Linear(hidden_dim//4, hidden_dim//8)
+        self.fc4 = nn.Linear(hidden_dim//8, 1)
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.2)
+        
+        # Layer normalization 
+        self.layer_norm = nn.LayerNorm(hidden_dim)
     
     def forward(self, h):
         """
@@ -119,9 +141,22 @@ class WeakSupervisionModule(nn.Module):
         Returns:
             eta_ws: Tensor of shape (batch_size, 1) representing weak supervision scores.
         """
-        # Compute weak supervision score
-        eta_ws = torch.sigmoid(self.fc(h))  # shape: (batch_size, 1)
-        return eta_ws   
+        # Apply layer normalization 
+        x = self.layer_norm(h)
+        
+        # Pass through multiple layers with ReLU activation
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        
+        x = F.relu(self.fc2(x))
+        x = self.dropout(x)
+        
+        x = F.relu(self.fc3(x))
+        x = self.dropout(x)
+        
+        # Final layer with sigmoid activation
+        eta_ws = torch.sigmoid(self.fc4(x))  # shape: (batch_size, 1)
+        return eta_ws
     
 # combining the two modules
 #******************Combined Module******************#
@@ -488,6 +523,9 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     table_id = query_item['table_id']
     expected_answer = query_item['answer']
     
+    # Get device from model
+    device = next(combined_model.parameters()).device
+    
     print(f"Processing question: {question}")
     print(f"Expected answer(s): {expected_answer}")
     
@@ -507,6 +545,9 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
             chunk_text = str(chunk['text'])
         
         inputs = tokenizer(chunk_text, return_tensors="pt", padding=True, truncation=True)
+        # Move inputs to the right device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
         with torch.no_grad():
             embeddings = embedding_model.model(**inputs).last_hidden_state.mean(dim=1)
             chunk_embeddings.append(embeddings)
@@ -516,6 +557,9 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     # Get question embedding
     print("Computing embedding for question...")
     question_inputs = tokenizer(question, return_tensors="pt", padding=True, truncation=True)
+    # Move question inputs to the right device
+    question_inputs = {k: v.to(device) for k, v in question_inputs.items()}
+    
     with torch.no_grad():
         question_embedding = embedding_model.model(**question_inputs).last_hidden_state.mean(dim=1)
     
@@ -524,13 +568,13 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     print("Computing relevance scores...")
     # Get combined relevance scores using both question and chunk embeddings
     scores, _, _ = combined_model(chunk_embeddings)
-    scores = scores.squeeze().tolist()
+    scores = scores.squeeze().cpu().tolist()  # Move to CPU before converting to Python list
     
     # Scale scores based on similarity with question
     similarity_scores = torch.nn.functional.cosine_similarity(
         chunk_embeddings, 
         question_embedding.expand(chunk_embeddings.size(0), -1)
-    ).tolist()
+    ).cpu().tolist()  # Move to CPU before converting to Python list
     
     print(f"Computing similarity scores... done!")
     
@@ -722,6 +766,15 @@ if __name__ == "__main__":
     print("TRIM-QA Pruning Script")
     print("=" * 50)
     
+    # Setup supercomputer configuration to use GPU if available
+    config = setup_supercomputer_config()
+    device = config['device']
+    print(f"Using device: {device}")
+    if device.type == 'cuda':
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+        print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+    
     # Initialize models
     hidden_dim = 768
     model_name = "bert-base-uncased"
@@ -729,7 +782,10 @@ if __name__ == "__main__":
     print("Loading models...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     embedding_model = EmbeddingModule(AutoModel.from_pretrained(model_name))
-    combined_model = CombinedModule(hidden_dim)
+    
+    # Move models to the appropriate device (GPU if available)
+    embedding_model.model = embedding_model.model.to(device)
+    combined_model = CombinedModule(hidden_dim).to(device)
     
     # Define thresholds
     thresholds = [0.2, 0.3, 0.4, 0.5]
