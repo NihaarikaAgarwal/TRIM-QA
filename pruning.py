@@ -13,6 +13,106 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
+# Configuration settings
+USE_BATCHED_PROCESSING = True        # Process chunks in batches instead of one by one
+ENABLE_CACHING = True                # Cache embeddings to avoid recomputation
+GENERATE_FULL_REPORTS = False        # Generate detailed HTML reports (slower)
+USE_EARLY_STOPPING = True            # Try to detect high-relevance chunks early
+USE_PARALLEL_PROCESSING = True       # Process multiple tables in parallel
+USE_MODEL_QUANTIZATION = False       # Use int8 quantization (faster but less precise)
+BATCH_SIZE = 64                      # Number of chunks to process at once
+MAX_CHUNKS_PER_TABLE = 5000         # Limit number of chunks per table (set to -1 for no limit)
+
+# Global cache for chunk embeddings
+chunk_embedding_cache = {}
+
+def optimize_models_for_inference(model, device):
+    """Optimize models for faster inference"""
+    model.eval()  # Set to evaluation mode
+    model = model.to(device)
+    
+    # Enable CUDA optimizations if available
+    if hasattr(torch.backends, 'cudnn'):
+        torch.backends.cudnn.benchmark = True
+    
+    # Use mixed precision where applicable
+    if hasattr(torch.cuda, 'amp') and torch.cuda.is_available():
+        model = torch.cuda.amp.autocast()(model)
+    
+    return model
+
+def quantize_model(model):
+    """Quantize model to int8 for faster inference and lower memory footprint"""
+    if not USE_MODEL_QUANTIZATION:
+        return model
+        
+    try:
+        import torch.quantization
+        
+        # Configure quantization
+        model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+        torch.quantization.prepare(model, inplace=True)
+        torch.quantization.convert(model, inplace=True)
+        
+        print("Model successfully quantized to int8")
+        return model
+    except Exception as e:
+        print(f"Quantization failed with error: {e}")
+        print("Continuing with full precision model")
+        return model
+
+def compute_chunk_embeddings_batch(chunks, embedding_model, tokenizer, device, batch_size=BATCH_SIZE):
+    """Process chunks in batches for faster embedding computation"""
+    all_embeddings = []
+    
+    for i in range(0, len(chunks), batch_size):
+        batch_chunks = chunks[i:i+batch_size]
+        batch_texts = []
+        
+        for chunk in batch_chunks:
+            if isinstance(chunk['text'], list):
+                chunk_text = " ".join([str(cell) for cell in chunk['text']])
+            else:
+                chunk_text = str(chunk['text'])
+            batch_texts.append(chunk_text)
+        
+        # Process the entire batch at once
+        inputs = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        with torch.no_grad():
+            # Process entire batch in one forward pass using the forward method
+            embeddings = embedding_model(**inputs)
+            all_embeddings.append(embeddings)
+            
+        # Print progress at reasonable intervals
+        if (i + batch_size) % (batch_size * 10) == 0 or (i + batch_size) >= len(chunks):
+            print(f"  Processed {min(i + batch_size, len(chunks))}/{len(chunks)} chunks...")
+    
+    return torch.cat(all_embeddings, dim=0) if all_embeddings else torch.tensor([])
+
+def get_chunk_embedding(chunk, embedding_model, tokenizer, device):
+    """Get embedding for a single chunk, using cache if available"""
+    if not ENABLE_CACHING:
+        return compute_chunk_embeddings_batch([chunk], embedding_model, tokenizer, device)[0]
+        
+    # Create a cache key based on chunk content
+    if isinstance(chunk['text'], list):
+        chunk_text = " ".join([str(cell) for cell in chunk['text']])
+    else:
+        chunk_text = str(chunk['text'])
+    
+    cache_key = hash(chunk_text)
+    
+    # Return cached embedding if available
+    if cache_key in chunk_embedding_cache:
+        return chunk_embedding_cache[cache_key]
+    
+    # Compute embedding if not in cache
+    embedding = compute_chunk_embeddings_batch([chunk], embedding_model, tokenizer, device)[0]
+    chunk_embedding_cache[cache_key] = embedding
+    return embedding
+
 # Supercomputer configurations
 def setup_supercomputer_config():
     # Enable GPU if available
@@ -62,9 +162,16 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # WeakSupervisionModule for further processing.
 #-----------------------------------#
 class EmbeddingModule(nn.Module):
-    def __init__(self, model_name):
+    def __init__(self, model):
         super(EmbeddingModule, self).__init__()
-        self.model = model_name  # Load your pre-trained model here
+        self.model = model  # Store the pre-trained model
+
+    def forward(self, **inputs):
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            # Use the last hidden state (CLS token) as the embedding
+            embeddings = outputs.last_hidden_state.mean(dim=1)
+            return embeddings
 
 
  #******************Unsupervided Relevance Score Module******************#
@@ -403,7 +510,7 @@ def process_top_queries(query_range, top_n_tables):
         
         print(f"\nProcessing queries {query_range[0]} to {query_range[1]}")
         print(f"Found {len(selected_files)} query files")
-        print(f"Will process top {top_n_tables} tables for each query")
+        print(f"Will process top {len(selected_files)} tables for this query")
         
         results = []
         
@@ -510,7 +617,7 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     Process a single query against its table chunks.
     
     Parameters:
-    - query_item: dict containing 'question', 'table_id', and 'answer'
+    - query_item: dict containing 'question', 'table_id', and target information
     - chunks: list of chunks for the associated table
     - embedding_model, combined_model, tokenizer: pre-loaded models
     - thresholds: list of thresholds to test
@@ -521,321 +628,599 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
     """
     question = query_item['question']
     table_id = query_item['table_id']
-    expected_answer = query_item['answer']
-    
-    # Get device from model
-    device = next(combined_model.parameters()).device
+    # Handle both 'answer' and 'target_answer' fields
+    expected_answer = query_item.get('answer', query_item.get('target_answer', ['Unknown']))
     
     print(f"Processing question: {question}")
     print(f"Expected answer(s): {expected_answer}")
     
-    # Tokenize and get embeddings for chunks and question
-    print("Computing embeddings for chunks...")
+    # Filter chunks to keep only row chunks
+    row_chunks = [chunk for chunk in chunks if chunk['metadata'].get('chunk_type') == 'row']
+    print(f"Filtered {len(chunks)} total chunks to {len(row_chunks)} row chunks")
+    
+    # Process chunks in batches using the optimized function
+    print("Computing embeddings for row chunks...")
     start_time = time.time()
     
-    chunk_embeddings = []
-    for i, chunk in enumerate(chunks):
-        if i % 10 == 0:
-            print(f"  Processing chunk {i+1}/{len(chunks)}...")
-        
-        # Combine chunk content into a single string
-        if isinstance(chunk['text'], list):
-            chunk_text = " ".join([str(cell) for cell in chunk['text']])
-        else:
-            chunk_text = str(chunk['text'])
-        
-        inputs = tokenizer(chunk_text, return_tensors="pt", padding=True, truncation=True)
-        # Move inputs to the right device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            embeddings = embedding_model.model(**inputs).last_hidden_state.mean(dim=1)
-            chunk_embeddings.append(embeddings)
+    # Use the batch processing function with progress tracking
+    chunk_embeddings = compute_chunk_embeddings_batch(row_chunks, embedding_model, tokenizer, device)
     
-    print(f"Generated embeddings for {len(chunks)} chunks in {time.time() - start_time:.2f} seconds")
+    print(f"Generated embeddings for {len(row_chunks)} row chunks in {time.time() - start_time:.2f} seconds")
     
     # Get question embedding
     print("Computing embedding for question...")
     question_inputs = tokenizer(question, return_tensors="pt", padding=True, truncation=True)
-    # Move question inputs to the right device
     question_inputs = {k: v.to(device) for k, v in question_inputs.items()}
     
     with torch.no_grad():
-        question_embedding = embedding_model.model(**question_inputs).last_hidden_state.mean(dim=1)
-    
-    chunk_embeddings = torch.cat(chunk_embeddings, dim=0)
+        question_embedding = embedding_model(**question_inputs)
     
     print("Computing relevance scores...")
-    # Get combined relevance scores using both question and chunk embeddings
-    scores, _, _ = combined_model(chunk_embeddings)
-    scores = scores.squeeze().cpu().tolist()  # Move to CPU before converting to Python list
+    # Compute scores with the combined model
+    with torch.no_grad():
+        scores, _, _ = combined_model(chunk_embeddings)
+        scores = scores.squeeze().cpu().tolist()
     
-    # Scale scores based on similarity with question
-    similarity_scores = torch.nn.functional.cosine_similarity(
-        chunk_embeddings, 
-        question_embedding.expand(chunk_embeddings.size(0), -1)
-    ).cpu().tolist()  # Move to CPU before converting to Python list
+    # Calculate similarity with question embedding
+    question_embedding_expanded = question_embedding.expand(chunk_embeddings.size(0), -1)
+    similarity_scores = F.cosine_similarity(
+        chunk_embeddings, question_embedding_expanded
+    ).cpu().tolist()
     
-    print(f"Computing similarity scores... done!")
-    
-    # Combine URS scores with question similarity
+    # Combine scores
     final_scores = [(s + sim) / 2 for s, sim in zip(scores, similarity_scores)]
     
-    # Apply score normalization to spread out the scores
+    # Normalize scores
     min_score = min(final_scores)
     max_score = max(final_scores)
-    if max_score > min_score:  # Avoid division by zero
+    if max_score > min_score:
         normalized_scores = [(score - min_score) / (max_score - min_score) for score in final_scores]
     else:
-        normalized_scores = final_scores
+        normalized_scores = [0.5] * len(final_scores)  # Default to 0.5 if all scores are equal
     
-    # Print score statistics for both raw and normalized scores
-    print(f"Raw score statistics - Min: {min(final_scores):.4f}, Max: {max(final_scores):.4f}, Avg: {sum(final_scores)/len(final_scores):.4f}")
-    print(f"Normalized score statistics - Min: {min(normalized_scores):.4f}, Max: {max(normalized_scores):.4f}, Avg: {sum(normalized_scores)/len(normalized_scores):.4f}")
+    # Print score statistics
+    print(f"Raw score stats - Min: {min(final_scores):.4f}, Max: {max(final_scores):.4f}, Avg: {sum(final_scores)/len(final_scores):.4f}")
+    print(f"Normalized stats - Min: {min(normalized_scores):.4f}, Max: {max(normalized_scores):.4f}, Avg: {sum(normalized_scores)/len(normalized_scores):.4f}")
     
-    # Show top 5 highest scoring chunks
-    top_indices = sorted(range(len(normalized_scores)), key=lambda i: normalized_scores[i], reverse=True)[:5]
-    print("Top 5 chunks:")
-    for i, idx in enumerate(top_indices):
-        chunk_preview = str(chunks[idx]['text'])[:50] + "..." if len(str(chunks[idx]['text'])) > 50 else str(chunks[idx]['text'])
-        chunk_type = chunks[idx]['metadata']['chunk_type'] if 'metadata' in chunks[idx] and 'chunk_type' in chunks[idx]['metadata'] else "unknown"
-        print(f"  {i+1}. Score: {normalized_scores[idx]:.4f} (raw: {final_scores[idx]:.4f}) - Type: {chunk_type} - {chunk_preview}")
-    
-    # Prune chunks based on normalized scores with different thresholds
-    threshold_results = {}
-    for threshold in thresholds:
-        pruned_chunks = prune_chunks(chunks, normalized_scores, threshold)
-        print(f"Pruning threshold: {threshold:.1f}")
-        print(f"Chunks with scores above threshold: {len(pruned_chunks)}/{len(chunks)} ({len(pruned_chunks)/len(chunks)*100:.1f}%)")
-        threshold_results[threshold] = len(pruned_chunks)
-    
-    # Use final_threshold for saving
-    pruned_chunks = prune_chunks(chunks, normalized_scores, final_threshold)
-    
-    # Create a unique and safe filename based on question and table ID
-    safe_question = "".join(c if c.isalnum() else "_" for c in question[:20])
-    output_filename = f"pruned_chunks_{table_id}_{safe_question}.json"
-    
-    # Save pruned chunks in pruning_results/pruned directory
-    pruned_chunks_file = os.path.join("pruning_results", "pruned", output_filename)
-    os.makedirs(os.path.dirname(pruned_chunks_file), exist_ok=True)
-    with open(pruned_chunks_file, 'w') as f:
-        json.dump(pruned_chunks, f, indent=2)
-    
-    print(f"Original chunks: {len(chunks)}, Pruned chunks: {len(pruned_chunks)}")
-    print(f"Saved pruned chunks to {pruned_chunks_file}")
-    
-    # Create and save DataFrames for visualization
-    print("Converting chunks to DataFrames for visualization...")
-    
-    # Convert chunks to DataFrames
-    original_df = chunks_to_dataframe(chunks)
-    original_df['raw_score'] = final_scores
-    original_df['normalized_score'] = normalized_scores
-    pruned_df = chunks_to_dataframe(pruned_chunks)
-    
-    # Save DataFrames to CSV in pruning_results/original and pruning_results/pruned
-    csv_base = os.path.join("pruning_results")
-    original_csv = os.path.join(csv_base, "original", f"{table_id}_{safe_question}_original.csv")
-    pruned_csv = os.path.join(csv_base, "pruned", f"{table_id}_{safe_question}_pruned.csv")
-    
-    os.makedirs(os.path.dirname(original_csv), exist_ok=True)
-    os.makedirs(os.path.dirname(pruned_csv), exist_ok=True)
-    
-    original_df.to_csv(original_csv, index=False)
-    pruned_df.to_csv(pruned_csv, index=False)
-    
-    print(f"Saved original chunks DataFrame to {original_csv}")
-    print(f"Saved pruned chunks DataFrame to {pruned_csv}")
-    
-    # Generate HTML report in pruning_results/reports directory
-    html_file = os.path.join(csv_base, "reports", f"{table_id}_{safe_question}_report.html")
-    os.makedirs(os.path.dirname(html_file), exist_ok=True)
-    
-    try:
-        # Create a styled DataFrame with conditional formatting for scores
-        styled_df = original_df.copy()
-        styled_df['pruned'] = styled_df['chunk_id'].isin(pruned_df['chunk_id']).map({True: 'Yes', False: 'No'})
-        
-        # Generate HTML report
-        html_content = f"""
-        <html>
-        <head>
-            <title>Pruning Report for {question}</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                h1, h2 {{ color: #333; }}
-                .stats {{ margin: 20px 0; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }}
-                .table-container {{ margin: 20px 0; }}
-                table {{ border-collapse: collapse; width: 100%; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; }}
-                th {{ background-color: #f2f2f2; }}
-                tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                .kept {{ background-color: #d4edda; }}
-                .pruned {{ background-color: #f8d7da; }}
-            </style>
-        </head>
-        <body>
-            <h1>Pruning Report</h1>
-            <p>Question: {question}</p>
-            <p>Expected answer(s): {expected_answer}</p>
-            
-            <div class="stats">
-                <h2>Statistics</h2>
-                <p>Total chunks: {len(chunks)}</p>
-                <p>Pruned chunks: {len(pruned_chunks)} ({len(pruned_chunks)/len(chunks)*100:.1f}%)</p>
-                <p>Pruning threshold: {final_threshold}</p>
-                <p>Raw score statistics - Min: {min(final_scores):.4f}, Max: {max(final_scores):.4f}, Avg: {sum(final_scores)/len(final_scores):.4f}</p>
-                <p>Normalized score statistics - Min: {min(normalized_scores):.4f}, Max: {max(normalized_scores):.4f}, Avg: {sum(normalized_scores)/len(normalized_scores):.4f}</p>
-            </div>
-            
-            <div class="table-container">
-                <h2>Chunk Data with Scores</h2>
-        """
-        
-        try:
-            # Try to use pandas styling with the correct method
-            # For older pandas versions, we need to use render() instead of to_html()
-            styled_df_style = styled_df.style.apply(
-                lambda row: ['background-color: #d4edda' if row['pruned'] == 'Yes' else 'background-color: #f8d7da' for _ in row], 
-                axis=1
-            )
-            
-            # Try different methods to convert to HTML based on pandas version
-            try:
-                styled_html = styled_df_style.to_html()  # Newer pandas versions
-            except AttributeError:
-                try:
-                    styled_html = styled_df_style.render()  # Older pandas versions
-                except AttributeError:
-                    # If neither method works, fall back to basic table
-                    raise ImportError("Pandas styling methods not available")
-                    
-            html_content += styled_html
-        except ImportError:
-            # Fall back to basic HTML table if Jinja2 is not available
-            print("Warning: Jinja2 not available. Using basic HTML table instead.")
-            table_html = "<table border='1'>\n"
-            
-            # Add header row
-            table_html += "<tr>"
-            for col in styled_df.columns:
-                table_html += f"<th>{col}</th>"
-            table_html += "</tr>\n"
-            
-            # Add data rows
-            for _, row in styled_df.iterrows():
-                bg_color = "#d4edda" if row['pruned'] == 'Yes' else "#f8d7da"
-                table_html += f"<tr style='background-color: {bg_color}'>"
-                for col in styled_df.columns:
-                    table_html += f"<td>{row[col]}</td>"
-                table_html += "</tr>\n"
-            
-            table_html += "</table>"
-            html_content += table_html
-        
-        html_content += """
-            </div>
-        </body>
-        </html>
-        """
-        
-        with open(html_file, 'w') as f:
-            f.write(html_content)
-        
-        print(f"Generated HTML pruning report: {html_file}")
-    except Exception as e:
-        print(f"Warning: Could not generate HTML report due to error: {e}")
-        print("CSV files were still generated successfully.")
+    # Prune chunks based on normalized scores with the specified threshold
+    pruned_chunks = prune_chunks(row_chunks, normalized_scores, threshold=final_threshold)
+    print(f"Pruning threshold: {final_threshold:.2f}")
+    print(f"Kept chunks: {len(pruned_chunks)}/{len(row_chunks)} ({len(pruned_chunks)/len(row_chunks)*100:.1f}%)")
     
     # Return results for summary
     return {
         'question': question,
         'table_id': table_id,
-        'expected_answer': expected_answer,
-        'original_chunks': len(chunks),
-        'pruned_chunks': len(pruned_chunks),
-        'reduction_percentage': (1 - len(pruned_chunks)/len(chunks)) * 100 if len(chunks) > 0 else 0,
-        'threshold_results': threshold_results,
-        'output_path': pruned_chunks_file,
-        'html_report': html_file
+        'target_table': query_item.get('target_table', 'Unknown'),
+        'target_answer': expected_answer,
+        'original_chunks': len(row_chunks),
+        'pruned_chunks': pruned_chunks,
+        'pruned_chunks_count': len(pruned_chunks),
+        'reduction_percentage': (1 - len(pruned_chunks)/len(row_chunks)) * 100 if len(row_chunks) > 0 else 0,
+        'normalized_scores': normalized_scores
+    }
+
+def process_query_with_early_stopping(query_item, chunks, embedding_model, combined_model, tokenizer, device, threshold, 
+                                     early_stopping_threshold=0.8):
+    """Process query with early stopping if top chunks have very high scores."""
+    # First, process a small sample of chunks to see if we can stop early
+    sample_size = min(50, len(chunks))
+    sample_chunks = chunks[:sample_size]
+    
+    start_time = time.time()
+    print(f"Testing early stopping with {sample_size} chunks...")
+    
+    # Process question
+    question = query_item['question']
+    question_inputs = tokenizer(question, return_tensors="pt", padding=True, truncation=True)
+    question_inputs = {k: v.to(device) for k, v in question_inputs.items()}
+    
+    # Handle both 'answer' and 'target_answer' fields
+    expected_answer = query_item.get('answer', query_item.get('target_answer', ['Unknown']))
+    
+    with torch.no_grad():
+        question_embedding = embedding_model(**question_inputs)
+    
+    # Compute embeddings for sample in batch
+    sample_embeddings = compute_chunk_embeddings_batch(sample_chunks, embedding_model, tokenizer, device)
+    
+    with torch.no_grad():
+        sample_scores, _, _ = combined_model(sample_embeddings)
+        sample_scores = sample_scores.squeeze().cpu().tolist()
+    
+    # If top scores are very high, we might be able to stop
+    top_sample_scores = sorted(sample_scores, reverse=True)[:10]
+    if len(top_sample_scores) > 0 and min(top_sample_scores) > early_stopping_threshold:
+        print(f"Early stopping triggered after {time.time() - start_time:.2f}s - found {len(top_sample_scores)} high-scoring chunks!")
+        
+        # Keep only the top scoring chunks
+        top_indices = sorted(range(len(sample_scores)), key=lambda i: sample_scores[i], reverse=True)[:10]
+        pruned_chunks = [sample_chunks[i] for i in top_indices]
+        
+        # Add scores to the chunks
+        for i, chunk in enumerate(pruned_chunks):
+            chunk['score'] = sample_scores[top_indices[i]]
+        
+        return {
+            'question': query_item['question'],
+            'table_id': query_item['table_id'],
+            'target_table': query_item.get('target_table', 'Unknown'),
+            'target_answer': expected_answer,
+            'original_chunks': len(chunks),
+            'pruned_chunks': len(pruned_chunks),
+            'reduction_percentage': (1 - len(pruned_chunks)/len(chunks)) * 100,
+            'early_stopped': True,
+            'pruned_chunks': pruned_chunks  # Include pruned chunks in the return value
+        }
+    
+    print("No early stopping, continuing with full processing...")
+    return None
+
+def save_pruning_results(query, table_id, original_chunks, pruned_chunks, threshold, target_table=None, target_answer=None, pruning_dir="pruning_results"):
+    """Save pruning results with optimized report generation."""
+    # Create a query-specific directory name (first 30 chars of query, sanitized)
+    query_dir_name = query[:30].replace(' ', '_').replace('?', '').replace('/', '_')
+    table_dir_name = table_id
+    
+    # Create directory structure
+    query_dir = os.path.join(pruning_dir, query_dir_name)
+    table_dir = os.path.join(query_dir, table_dir_name)
+    ensure_directory(table_dir)
+    
+    base_filename = "results"
+    
+    # Always save pruned chunks as this is essential
+    pruned_path = os.path.join(table_dir, f"{base_filename}_pruned.json")
+    with open(pruned_path, 'w') as f:
+        json.dump(pruned_chunks, f)
+    
+    if not GENERATE_FULL_REPORTS:
+        # Return early if full reports are disabled
+        return {
+            'pruned_path': os.path.join(query_dir_name, table_dir_name, f"{base_filename}_pruned.json")
+        }
+    
+    # Get scores for chunk visualization
+    pruned_chunk_ids = [chunk['metadata'].get('chunk_id') for chunk in pruned_chunks]
+    
+    # Create DataFrames for original and pruned chunks
+    original_df = chunks_to_dataframe(original_chunks, normalized_scores=[chunk.get('score', 0.0) for chunk in original_chunks], threshold=threshold)
+    original_df['is_pruned'] = original_df['chunk_id'].apply(lambda x: "No" if x in pruned_chunk_ids else "Yes")
+    
+    # Save CSV files
+    original_path = os.path.join(table_dir, f"{base_filename}_original.csv")
+    original_df.to_csv(original_path, index=False)
+    
+    # Generate simplified HTML report
+    report_path = os.path.join(table_dir, f"{base_filename}_report.html")
+    
+    # Calculate statistics
+    total_chunks = len(original_chunks)
+    pruned_count = len(pruned_chunks)
+    reduction_pct = ((total_chunks - pruned_count) / total_chunks * 100) if total_chunks > 0 else 0
+    
+    # Generate basic HTML report
+    html_content = f"""
+    <html>
+    <head>
+        <title>Pruning Report for {query}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .stats {{ background-color: #f5f5f5; padding: 10px; margin: 10px 0; }}
+            table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            .pruned {{ background-color: #f8d7da; }}
+            .kept {{ background-color: #d4edda; }}
+        </style>
+    </head>
+    <body>
+        <h1>Pruning Summary</h1>
+        <div class="stats">
+            <p>Query: {query}</p>
+            <p>Total chunks: {total_chunks}</p>
+            <p>Pruned chunks: {pruned_count}</p>
+            <p>Reduction: {reduction_pct:.1f}%</p>
+            <p>Threshold: {threshold}</p>
+            <p>Target Table: {target_table or "Not specified"}</p>
+            <p>Target Answer: {target_answer or "Not specified"}</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    with open(report_path, 'w') as f:
+        f.write(html_content)
+    
+    return {
+        'original_path': os.path.join(query_dir_name, table_dir_name, f"{base_filename}_original.csv"),
+        'pruned_path': os.path.join(query_dir_name, table_dir_name, f"{base_filename}_pruned.json"),
+        'report_path': os.path.join(query_dir_name, table_dir_name, f"{base_filename}_report.html")
+    }
+
+def get_user_input():
+    """Get user input for number of queries, tables to process, and pruning threshold."""
+    try:
+        num_queries = input("Enter number of queries to test (press Enter for all queries): ").strip()
+        num_queries = int(num_queries) if num_queries else None
+        
+        num_tables = input("Enter number of tables to test per query (press Enter for all tables): ").strip()
+        num_tables = int(num_tables) if num_tables else None
+        
+        threshold = input("Enter pruning threshold (0.0 to 1.0, press Enter for default 0.6): ").strip()
+        threshold = float(threshold) if threshold else 0.6
+        
+        # Validate threshold
+        if not 0 <= threshold <= 1:
+            print("Invalid threshold. Using default value of 0.6")
+            threshold = 0.6
+        
+        print(f"\nConfiguration:")
+        print(f"Number of queries: {'All' if num_queries is None else num_queries}")
+        print(f"Tables per query: {'All' if num_tables is None else num_tables}")
+        print(f"Pruning threshold: {threshold}")
+        
+        return num_queries, num_tables, threshold
+    except ValueError:
+        print("Invalid input. Using all queries, all tables, and default threshold of 0.6")
+        return None, None, 0.6
+
+def process_query_file(file_path):
+    """Extract query information from a query CSV file.
+    
+    Args:
+        file_path: Path to the CSV file containing query and table information
+        
+    Returns:
+        tuple: (query string, list of table info dictionaries)
+    """
+    try:
+        # Read the CSV file
+        df = pd.read_csv(file_path)
+        
+        # Get the query (same for all rows)
+        query = df['query'].iloc[0]
+        
+        # Process each table
+        tables_info = []
+        for _, row in df.iterrows():
+            table_info = {
+                'table_id': row['top tables'],
+                'target_table': row['target table'],
+                'target_answer': row['target answer']
+            }
+            tables_info.append(table_info)
+        
+        print(f"Processed query file: {file_path}")
+        print(f"Query: {query}")
+        print(f"Found {len(tables_info)} tables")
+        
+        return query, tables_info
+    except Exception as e:
+        print(f"Error processing query file {file_path}: {e}")
+        return "", []
+
+def ensure_directory(directory):
+    """Create directory if it doesn't exist."""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+def process_query_numbers(query_numbers, tables_per_query, embedding_model, combined_model, tokenizer, device, threshold):
+    """Process specific query numbers from Top-150-Quries directory.
+    
+    Args:
+        query_numbers: List of query numbers to process (e.g., [1, 2])
+        tables_per_query: Number of top tables to process per query
+        embedding_model, combined_model, tokenizer: Models for embedding and scoring
+        device: Device to run models on
+        threshold: Pruning threshold
+        
+    Returns:
+        Dictionary of results
+    """
+    results = []
+    table_scores = {}  # Dictionary to store average scores per table
+    
+    # Get all query files
+    query_dir = "Top-150-Quries"
+    all_query_files = sorted([f for f in os.listdir(query_dir) 
+                             if f.startswith("query") and f.endswith("_TopTables.csv")])
+    
+    # Filter for specific query numbers
+    query_files = []
+    for query_num in query_numbers:
+        # Find the corresponding file
+        pattern = f"query{query_num}_"
+        matching_files = [f for f in all_query_files if f.startswith(pattern)]
+        
+        if matching_files:
+            query_files.append(matching_files[0])
+        else:
+            print(f"Warning: Query number {query_num} not found in {query_dir}")
+    
+    if not query_files:
+        print(f"No query files found for the specified query numbers: {query_numbers}")
+        return {"results": [], "table_scores": {}}
+    
+    print(f"\nProcessing {len(query_files)} query files: {query_files}")
+    
+    # Load chunks once at the start
+    print("Loading chunks from chunks.json...")
+    all_chunks = {}
+    with jsonlines.open('chunks.json', 'r') as reader:
+        for chunk in reader:
+            if 'metadata' in chunk and 'table_name' in chunk['metadata']:
+                table_id = chunk['metadata']['table_name']
+                if chunk['metadata'].get('chunk_type') != 'table':  # Skip table chunks
+                    if table_id not in all_chunks:
+                        all_chunks[table_id] = []
+                    all_chunks[table_id].append(chunk)
+    
+    print(f"Loaded chunks for {len(all_chunks)} tables")
+    
+    # Process each query file
+    for query_file in query_files:
+        query_num = query_file.split('_')[0].replace('query', '')
+        print(f"\nProcessing {query_file} (Query {query_num})")
+        
+        query, tables_info = process_query_file(os.path.join(query_dir, query_file))
+        
+        # Take only the specified number of tables
+        if tables_per_query and tables_per_query > 0:
+            tables_info = tables_info[:tables_per_query]
+        
+        print(f"Processing {len(tables_info)} tables for query: {query}")
+        
+        # Process each table for this query
+        for table_info in tables_info:
+            table_id = table_info['table_id']
+            target_table = table_info['target_table']
+            target_answer = table_info['target_answer']
+            
+            print(f"\nProcessing table {table_id}")
+            print(f"Target table: {target_table}")
+            print(f"Target answer: {target_answer}")
+            
+            chunks = all_chunks.get(table_id, [])
+            
+            if not chunks:
+                print(f"No chunks found for table {table_id}")
+                continue
+            
+            # Limit chunks if needed
+            if MAX_CHUNKS_PER_TABLE > 0:
+                chunks = chunks[:MAX_CHUNKS_PER_TABLE]
+            
+            # Try early stopping first if enabled
+            if USE_EARLY_STOPPING:
+                early_result = process_query_with_early_stopping(
+                    {'question': query, 'table_id': table_id, 'target_table': target_table, 'target_answer': target_answer},
+                    chunks,
+                    embedding_model,
+                    combined_model,
+                    tokenizer,
+                    device,
+                    threshold
+                )
+                
+                if early_result:
+                    results.append(early_result)
+                    
+                    # Calculate and store average score for this table
+                    avg_score = sum(chunk.get('score', 0) for chunk in early_result.get('pruned_chunks', [])) / len(early_result.get('pruned_chunks', []))
+                    table_scores[table_id] = {
+                        'avg_score': avg_score,
+                        'query': query,
+                        'is_target': (table_id == target_table),
+                        'target_table': target_table,
+                        'target_answer': target_answer
+                    }
+                    continue
+            
+            # Process normally if early stopping didn't succeed
+            print(f"Processing table {table_id} ({len(chunks)} chunks)...")
+            try:
+                result = process_query(
+                    {'question': query, 'table_id': table_id, 'target_table': target_table, 'target_answer': target_answer},
+                    chunks,
+                    embedding_model,
+                    combined_model,
+                    tokenizer,
+                    [threshold],  # Use single threshold
+                    threshold
+                )
+                
+                if result:
+                    results.append(result)
+                    
+                    # Calculate and store average score for this table
+                    avg_score = sum(chunk.get('score', 0) for chunk in result.get('pruned_chunks', [])) / len(result.get('pruned_chunks', []))
+                    table_scores[table_id] = {
+                        'avg_score': avg_score,
+                        'query': query,
+                        'is_target': (table_id == target_table),
+                        'target_table': target_table,
+                        'target_answer': target_answer
+                    }
+                    
+                    # Save results with target information
+                    save_pruning_results(
+                        query=query,
+                        table_id=table_id,
+                        original_chunks=chunks,
+                        pruned_chunks=result['pruned_chunks'],
+                        threshold=threshold,
+                        target_table=target_table,
+                        target_answer=target_answer
+                    )
+            except Exception as e:
+                print(f"Error processing table {table_id}: {e}")
+                continue
+    
+    return {
+        "results": results,
+        "table_scores": table_scores
     }
 
 # Main execution block
 if __name__ == "__main__":
-    print("TRIM-QA Pruning Script")
+    print("TRIM-QA Pruning Script - Optimized Version")
     print("=" * 50)
     
-    # Setup supercomputer configuration to use GPU if available
+    # Get user input for configuration
+    num_queries, num_tables, threshold = get_user_input()
+    
+    # Setup supercomputer configuration
     config = setup_supercomputer_config()
     device = config['device']
-    print(f"Using device: {device}")
-    if device.type == 'cuda':
-        print(f"CUDA available: {torch.cuda.is_available()}")
-        print(f"CUDA device count: {torch.cuda.device_count()}")
-        print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+    BATCH_SIZE = config['batch_size']
     
-    # Initialize models
+    print(f"\nSystem Configuration:")
+    print(f"Device: {device}")
+    if device.type == 'cuda':
+        print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+        print(f"Batch Size: {BATCH_SIZE}")
+        print(f"Number of GPUs: {config['n_gpus']}")
+    
+    print("\nOptimization Settings:")
+    print(f"Batch Processing: {USE_BATCHED_PROCESSING}")
+    print(f"Caching Enabled: {ENABLE_CACHING}")
+    print(f"Early Stopping: {USE_EARLY_STOPPING}")
+    print(f"Full Reports: {GENERATE_FULL_REPORTS}")
+    print(f"Model Quantization: {USE_MODEL_QUANTIZATION}")
+    print(f"Max Chunks Per Table: {MAX_CHUNKS_PER_TABLE}")
+    
+    # Initialize models with optimizations
+    print("\nInitializing models...")
     hidden_dim = 768
     model_name = "bert-base-uncased"
     
-    print("Loading models...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     embedding_model = EmbeddingModule(AutoModel.from_pretrained(model_name))
+    combined_model = CombinedModule(hidden_dim)
     
-    # Move models to the appropriate device (GPU if available)
-    embedding_model.model = embedding_model.model.to(device)
-    combined_model = CombinedModule(hidden_dim).to(device)
+    # Apply optimizations to models
+    embedding_model = optimize_models_for_inference(embedding_model, device)
+    combined_model = optimize_models_for_inference(combined_model, device)
     
-    # Define thresholds
-    thresholds = [0.2, 0.3, 0.4, 0.5]
-    final_threshold = 0.6
+    if USE_MODEL_QUANTIZATION:
+        embedding_model = quantize_model(embedding_model)
+        combined_model = quantize_model(combined_model)
     
-    # Get query range from user
-    while True:
-        try:
-            print("\nEnter query range (1-150, format: start end):")
-            start, end = map(int, input("> ").split())
-            if 1 <= start <= end <= 150:
-                break
-            print("Invalid range. Start must be <= end, and both must be between 1 and 150.")
-        except ValueError:
-            print("Please enter two numbers separated by space.")
-    
-    # Get number of top tables to process
-    while True:
-        try:
-            print("\nEnter number of top tables to process for each query:")
-            top_n = int(input("> "))
-            if top_n > 0:
-                break
-            print("Please enter a positive number.")
-        except ValueError:
-            print("Please enter a valid number.")
-    
-    # Process queries
-    print(f"\nProcessing queries {start}-{end} with top {top_n} tables each...")
-    results = process_top_queries((start, end), top_n)
+    # Process specific query numbers
+    if num_queries is not None:
+        if num_queries <= 0:
+            print("Number of queries must be positive")
+            sys.exit(1)
+            
+        # Generate query numbers list [1, 2, ..., num_queries]
+        query_numbers = list(range(1, num_queries + 1))
+        print(f"Processing specific query numbers: {query_numbers}")
+        
+        # Process these query numbers
+        processing_results = process_query_numbers(
+            query_numbers=query_numbers,
+            tables_per_query=num_tables if num_tables else None,
+            embedding_model=embedding_model,
+            combined_model=combined_model,
+            tokenizer=tokenizer,
+            device=device,
+            threshold=threshold
+        )
+        
+        # Extract results
+        results = processing_results["results"]
+        table_scores = processing_results["table_scores"]
+        
+        # Create a table scores CSV
+        if table_scores:
+            # Convert table scores dictionary to DataFrame
+            scores_df = pd.DataFrame([
+                {
+                    'table_id': table_id,
+                    'query': info['query'],
+                    'avg_score': info['avg_score'],
+                    'is_target': info['is_target'],
+                    'target_table': info['target_table'],
+                    'target_answer': info['target_answer']
+                }
+                for table_id, info in table_scores.items()
+            ])
+            
+            # Sort by average score
+            scores_df = scores_df.sort_values(by='avg_score', ascending=False)
+            
+            # Save to CSV
+            table_scores_path = os.path.join("pruning_results", f"table_scores_summary.csv")
+            scores_df.to_csv(table_scores_path, index=False)
+            print(f"\nTable scores summary saved to {table_scores_path}")
+            
+    else:
+        # Process all queries (using the existing logic)
+        print("\nProcessing all queries...")
+        results = []
+        
+        # Load chunks once at the start
+        print("Loading chunks from chunks.json...")
+        all_chunks = {}
+        with jsonlines.open('chunks.json', 'r') as reader:
+            for chunk in reader:
+                if 'metadata' in chunk and 'table_name' in chunk['metadata']:
+                    table_id = chunk['metadata']['table_name']
+                    if chunk['metadata'].get('chunk_type') != 'table':  # Skip table chunks
+                        if table_id not in all_chunks:
+                            all_chunks[table_id] = []
+                        all_chunks[table_id].append(chunk)
+        
+        print(f"Loaded chunks for {len(all_chunks)} tables")
+        
+        # Process all queries
+        query_files = sorted([f for f in os.listdir("Top-150-Quries") 
+                             if f.startswith("query") and f.endswith("_TopTables.csv")])
+        
+        # Process each query
+        for query_file in query_files:
+            print(f"\nProcessing {query_file}")
+            query, tables_info = process_query_file(os.path.join("Top-150-Quries", query_file))
+            
+            if num_tables:
+                tables_info = tables_info[:num_tables]
+            
+            # Process tables
+            # ...existing code for processing tables...
     
     # Generate final summary
     if results:
         print("\n===== Final Summary =====")
         print(f"Processed {len(results)} table-query pairs")
-        avg_reduction = sum(r['reduction_percentage'] for r in results) / len(results)
-        print(f"Average chunk reduction: {avg_reduction:.1f}%")
         
-        # Save summary to CSV
+        # Fix the summary calculation to handle both count and list for pruned_chunks
+        total_original = sum(r.get('original_chunks', 0) for r in results)
+        
+        # Use pruned_chunks_count if available, otherwise count the pruned_chunks list
+        total_pruned = sum(r.get('pruned_chunks_count', len(r.get('pruned_chunks', []))) for r in results)
+        
+        # Calculate average reduction correctly
+        avg_reduction = sum(r.get('reduction_percentage', 0) for r in results) / len(results)
+        
+        print(f"Total original chunks: {total_original}")
+        print(f"Total pruned chunks: {total_pruned}")
+        print(f"Average reduction: {avg_reduction:.1f}%")
+        
+        # Save summary with correct handling of pruned chunks
         summary_df = pd.DataFrame([{
-            'query': r['question'],
-            'table_id': r['table_id'],
-            'original_chunks': r['original_chunks'],
-            'pruned_chunks': r['pruned_chunks'],
-            'reduction_percentage': r['reduction_percentage']
+            'query': r.get('question', ''),
+            'table_id': r.get('table_id', ''),
+            'target_table': r.get('target_table', ''),
+            'target_answer': r.get('target_answer', ''),
+            'original_chunks': r.get('original_chunks', 0),
+            'pruned_chunks': r.get('pruned_chunks_count', len(r.get('pruned_chunks', []))),
+            'reduction_percentage': r.get('reduction_percentage', 0),
+            'early_stopped': r.get('early_stopped', False)
         } for r in results])
         
-        summary_path = "pruning_results/summary.csv"
+        summary_path = os.path.join("pruning_results", "summary.csv")
         summary_df.to_csv(summary_path, index=False)
-        print(f"Summary saved to {summary_path}")
+        print(f"\nSummary saved to {summary_path}")
     else:
         print("No results generated. Please check the errors above.")
 
