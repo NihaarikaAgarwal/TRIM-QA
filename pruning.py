@@ -230,7 +230,11 @@ class URSModule(nn.Module):
 class WeakSupervisionModule(nn.Module):
     def __init__(self, hidden_dim):
         super(WeakSupervisionModule, self).__init__()
-        # Multiple fully-connected layers with decreasing dimensions
+        # Process query and chunk embeddings together
+        self.query_projection = nn.Linear(hidden_dim, hidden_dim//2)
+        self.chunk_projection = nn.Linear(hidden_dim, hidden_dim//2)
+        
+        # After concatenation, process combined features
         self.fc1 = nn.Linear(hidden_dim, hidden_dim//2)
         self.fc2 = nn.Linear(hidden_dim//2, hidden_dim//4) 
         self.fc3 = nn.Linear(hidden_dim//4, hidden_dim//8)
@@ -242,12 +246,58 @@ class WeakSupervisionModule(nn.Module):
         # Layer normalization 
         self.layer_norm = nn.LayerNorm(hidden_dim)
     
-    def forward(self, h):
+    def forward(self, chunk_embeddings, query_embedding=None):
         """
-        h: Tensor of shape (batch_size, hidden_dim) representing token embeddings.
+        chunk_embeddings: Tensor of shape (batch_size, hidden_dim) representing chunk embeddings
+        query_embedding: Tensor of shape (hidden_dim) or (1, hidden_dim) representing query embedding
         Returns:
-            eta_ws: Tensor of shape (batch_size, 1) representing weak supervision scores.
+            eta_ws: Tensor of shape (batch_size, 1) representing weak supervision scores
         """
+        # If no query provided, fall back to unsupervised behavior
+        if query_embedding is None:
+            return self._forward_no_query(chunk_embeddings)
+        
+        # Make sure query_embedding is properly expanded to match chunk_embeddings batch size
+        batch_size = chunk_embeddings.size(0)
+        
+        # Handle different input shapes for query_embedding
+        if len(query_embedding.shape) == 1:  # If it's a single vector (hidden_dim)
+            # Expand to match the batch size of chunk_embeddings
+            query_embedding = query_embedding.unsqueeze(0).expand(batch_size, -1)
+        elif query_embedding.size(0) == 1:  # If it's (1, hidden_dim)
+            # Expand to match the batch size of chunk_embeddings
+            query_embedding = query_embedding.expand(batch_size, -1)
+        elif query_embedding.size(0) != chunk_embeddings.size(0):
+            # If dimensions still don't match, raise an error
+            raise ValueError(f"Query embedding batch size {query_embedding.size(0)} does not match chunk embeddings batch size {chunk_embeddings.size(0)}")
+        
+        # Project query and chunk embeddings to a common space
+        query_features = self.query_projection(query_embedding)
+        chunk_features = self.chunk_projection(chunk_embeddings)
+        
+        # Ensure dimensions match before concatenation
+        if query_features.size(0) != chunk_features.size(0):
+            raise ValueError(f"Query features size {query_features.size()} doesn't match chunk features size {chunk_features.size()}")
+        
+        # Combine the features (concatenation)
+        combined = torch.cat([chunk_features, query_features], dim=1)
+        
+        # Pass through fully connected layers
+        x = F.relu(self.fc1(combined))
+        x = self.dropout(x)
+        
+        x = F.relu(self.fc2(x))
+        x = self.dropout(x)
+        
+        x = F.relu(self.fc3(x))
+        x = self.dropout(x)
+        
+        # Final layer with sigmoid activation for relevance scores
+        eta_ws = torch.sigmoid(self.fc4(x))
+        return eta_ws
+    
+    def _forward_no_query(self, h):
+        """Legacy method when no query is provided"""
         # Apply layer normalization 
         x = self.layer_norm(h)
         
@@ -262,7 +312,7 @@ class WeakSupervisionModule(nn.Module):
         x = self.dropout(x)
         
         # Final layer with sigmoid activation
-        eta_ws = torch.sigmoid(self.fc4(x))  # shape: (batch_size, 1)
+        eta_ws = torch.sigmoid(self.fc4(x))
         return eta_ws
     
 # combining the two modules
@@ -279,22 +329,23 @@ class CombinedModule(nn.Module):
         self.lambda_urs = 0.6  # weight for unsupervised relevance score ----> can be tuned
         self.lambda_ws = 0.4   # weight for weak supervision score  ----> can be tuned
     
-    def forward(self, h):
+    def forward(self, chunk_embeddings, query_embedding=None):
         """
-        h: Tensor of shape (batch_size, hidden_dim) representing token embeddings.
+        chunk_embeddings: Tensor of shape (batch_size, hidden_dim) representing chunk embeddings
+        query_embedding: Tensor of shape (hidden_dim) representing query embedding (optional)
         Returns:
-            eta_combined: Tensor of shape (batch_size, 1) representing combined relevance scores.
+            eta_combined: Tensor of shape (batch_size, 1) representing combined relevance scores
         """
-        # Get unsupervised relevance scores
-        eta_uns, mu, sigma = self.urs_module(h)
+        # Get unsupervised relevance scores (doesn't depend on query)
+        eta_uns, mu, sigma = self.urs_module(chunk_embeddings)
         
-        # Get weak supervision scores
-        eta_ws = self.ws_module(h)
+        # Get weak supervision scores (now with query)
+        eta_ws = self.ws_module(chunk_embeddings, query_embedding)
         
-        # Combine the scores (you can adjust the combination method)
-        eta_combined = self.lambda_urs*eta_uns + self.lambda_ws*eta_ws
+        # Combine the scores
+        eta_combined = self.lambda_urs * eta_uns + self.lambda_ws * eta_ws
         return eta_combined, mu, sigma
-    
+
 #******************Pruning Function******************#
 # This function prunes the chunks based on the combined relevance scores.
 # It filters out chunks with scores below a certain threshold.
@@ -656,30 +707,21 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
         question_embedding = embedding_model(**question_inputs)
     
     print("Computing relevance scores...")
-    # Compute scores with the combined model
+    # Pass both chunk embeddings AND question embedding to the combined model
     with torch.no_grad():
-        scores, _, _ = combined_model(chunk_embeddings)
+        scores, _, _ = combined_model(chunk_embeddings, question_embedding)
         scores = scores.squeeze().cpu().tolist()
     
-    # Calculate similarity with question embedding
-    question_embedding_expanded = question_embedding.expand(chunk_embeddings.size(0), -1)
-    similarity_scores = F.cosine_similarity(
-        chunk_embeddings, question_embedding_expanded
-    ).cpu().tolist()
-    
-    # Combine scores
-    final_scores = [(s + sim) / 2 for s, sim in zip(scores, similarity_scores)]
-    
     # Normalize scores
-    min_score = min(final_scores)
-    max_score = max(final_scores)
+    min_score = min(scores)
+    max_score = max(scores)
     if max_score > min_score:
-        normalized_scores = [(score - min_score) / (max_score - min_score) for score in final_scores]
+        normalized_scores = [(score - min_score) / (max_score - min_score) for score in scores]
     else:
-        normalized_scores = [0.5] * len(final_scores)  # Default to 0.5 if all scores are equal
+        normalized_scores = [0.5] * len(scores)  # Default to 0.5 if all scores are equal
     
     # Print score statistics
-    print(f"Raw score stats - Min: {min(final_scores):.4f}, Max: {max(final_scores):.4f}, Avg: {sum(final_scores)/len(final_scores):.4f}")
+    print(f"Raw score stats - Min: {min(scores):.4f}, Max: {max(scores):.4f}, Avg: {sum(scores)/len(scores):.4f}")
     print(f"Normalized stats - Min: {min(normalized_scores):.4f}, Max: {max(normalized_scores):.4f}, Avg: {sum(normalized_scores)/len(normalized_scores):.4f}")
     
     # Prune chunks based on normalized scores with the specified threshold
@@ -703,12 +745,21 @@ def process_query(query_item, chunks, embedding_model, combined_model, tokenizer
 def process_query_with_early_stopping(query_item, chunks, embedding_model, combined_model, tokenizer, device, threshold, 
                                      early_stopping_threshold=0.8):
     """Process query with early stopping if top chunks have very high scores."""
+    # Filter chunks to keep only row chunks
+    row_chunks = [chunk for chunk in chunks if chunk['metadata'].get('chunk_type') == 'row']
+    print(f"Filtered {len(chunks)} total chunks to {len(row_chunks)} row chunks for early stopping")
+    
     # First, process a small sample of chunks to see if we can stop early
-    sample_size = min(50, len(chunks))
-    sample_chunks = chunks[:sample_size]
+    sample_size = min(50, len(row_chunks))
+    sample_chunks = row_chunks[:sample_size]
+    
+    # Handle the case of empty or single chunk
+    if len(sample_chunks) == 0:
+        print("No row chunks found for early stopping. Continuing with full processing...")
+        return None
     
     start_time = time.time()
-    print(f"Testing early stopping with {sample_size} chunks...")
+    print(f"Testing early stopping with {sample_size} row chunks...")
     
     # Process question
     question = query_item['question']
@@ -725,16 +776,20 @@ def process_query_with_early_stopping(query_item, chunks, embedding_model, combi
     sample_embeddings = compute_chunk_embeddings_batch(sample_chunks, embedding_model, tokenizer, device)
     
     with torch.no_grad():
-        sample_scores, _, _ = combined_model(sample_embeddings)
+        sample_scores, _, _ = combined_model(sample_embeddings, question_embedding)
         sample_scores = sample_scores.squeeze().cpu().tolist()
     
+    # Handle case where there's only one chunk (squeeze makes it a scalar)
+    if not isinstance(sample_scores, list):
+        sample_scores = [sample_scores]
+    
     # If top scores are very high, we might be able to stop
-    top_sample_scores = sorted(sample_scores, reverse=True)[:10]
+    top_sample_scores = sorted(sample_scores, reverse=True)[:min(10, len(sample_scores))]
     if len(top_sample_scores) > 0 and min(top_sample_scores) > early_stopping_threshold:
         print(f"Early stopping triggered after {time.time() - start_time:.2f}s - found {len(top_sample_scores)} high-scoring chunks!")
         
         # Keep only the top scoring chunks
-        top_indices = sorted(range(len(sample_scores)), key=lambda i: sample_scores[i], reverse=True)[:10]
+        top_indices = sorted(range(len(sample_scores)), key=lambda i: sample_scores[i], reverse=True)[:min(10, len(sample_scores))]
         pruned_chunks = [sample_chunks[i] for i in top_indices]
         
         # Add scores to the chunks
@@ -746,11 +801,11 @@ def process_query_with_early_stopping(query_item, chunks, embedding_model, combi
             'table_id': query_item['table_id'],
             'target_table': query_item.get('target_table', 'Unknown'),
             'target_answer': expected_answer,
-            'original_chunks': len(chunks),
-            'pruned_chunks': len(pruned_chunks),
-            'reduction_percentage': (1 - len(pruned_chunks)/len(chunks)) * 100,
-            'early_stopped': True,
-            'pruned_chunks': pruned_chunks  # Include pruned chunks in the return value
+            'original_chunks': len(row_chunks),
+            'pruned_chunks': pruned_chunks,
+            'pruned_chunks_count': len(pruned_chunks),
+            'reduction_percentage': (1 - len(pruned_chunks)/len(row_chunks)) * 100 if len(row_chunks) > 0 else 0,
+            'early_stopped': True
         }
     
     print("No early stopping, continuing with full processing...")
