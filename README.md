@@ -24,6 +24,16 @@ For GPU support (recommended for large datasets):
 pip install sentence-transformers faiss-gpu torch pandas numpy tqdm tabulate matplotlib colorama
 ```
 
+### Installing PyTorch with CUDA Support
+
+If you need specific PyTorch versions with CUDA support, use the provided `torch_update.txt` file:
+
+```bash
+pip install -r torch_update.txt
+```
+
+This will install PyTorch 1.10.2 with CUDA 11.3 support, which is optimal for this project.
+
 ### Directory Structure
 
 Make sure you have the following directories:
@@ -171,3 +181,4 @@ To evaluate pruning performance:
 ```bash
 python compare_pruning_results.py --pruned-dir pruned_chunks --query "your query" --output pruning_comparison_results
 ```
+
