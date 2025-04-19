@@ -3,9 +3,12 @@ tqdm>=4.64.1
 rank-bm25>=0.2.2
 numpy>=1.19.5
 torch<=1.9.1  # Updated for Python 3.6 compatibility
+torch-scatter  # Added for TAPAS functionality
 transformers
 jsonlines
 pandas
 jinja2
 sentence-transformers
 scikit-learn
+setuptools-rust>=1.1.2  # Added to build tokenizers package
+tokenizers>=0.10.3,<0.13  # Pre-built binary if available
