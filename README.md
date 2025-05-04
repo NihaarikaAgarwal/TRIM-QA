@@ -111,25 +111,8 @@ python sbert_rerank_postpruning.py --query "your query here" --output reranked_r
   - SBERT surpassed TAPAS in recall and efficiency.
   - Post-pruning reranking improved top-10% and top-20% rankings.
 
-### Figures and Tables
-- **Figure 1:** BM25 Recall Comparison (Basic vs. Advanced Tokenization).
-- **Figure 2:** Recall Comparison (TAPAS vs. SBERT).
-- **Figure 3:** Recall (BM25 vs. Pre-pruning vs. Post-pruning).
-- **Figure 4:** Top-10% & Top-20% Rankings (BM25 vs. Pre-pruning vs. Post-pruning).
-- **Table 1:** Recall Results (BM25, Pre-pruning, Post-pruning).
 
 ---
-
-## Shortcomings and Future Work
-- **Limitations:**
-  - Relevance scoring relies on surface-level semantic proximity.
-  - Struggles with multilingual content transliterated into English.
-- **Future Directions:**
-  - Develop schema-aware pruning inspired by CABINET architecture.
-  - Extend pipeline to handle complex, compositional queries.
-
----
-
 ## References
 - [BM25 Weighting Function](https://www.researchgate.net/publication/221037764_Okapi)
 - [CABINET: Context Relevance-Based Noise Reduction](https://arxiv.org/pdf/2402.01155)
@@ -137,8 +120,4 @@ python sbert_rerank_postpruning.py --query "your query here" --output reranked_r
 - [TAPAS: Table Parsing](https://arxiv.org/pdf/2004.02349)
 
 ---
-
-## Appendix
-- **Presentation:** [Google Drive](https://drive.google.com/drive/folders/1OFOgt6PrCW023hjH5jXdoefXUSPo8qjG)
-- **GitHub Repository:** [TRIM-QA](https://github.com/NihaarikaAgarwal/TRIM-QA)
 
