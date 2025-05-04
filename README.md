@@ -46,9 +46,7 @@ Pruning reduces irrelevant context and improves the focus of downstream processi
   - JSON schema allows exploration of structural components (rows vs. columns).
  
     Downloading the dataset:
-    mkdir -p "${nq_data_dir}"
-    gsutil -m cp -R gs://tapas_models/2021_07_22/nq_tables/* "${nq_data_dir}
-
+    <pre> ```bash mkdir -p "${nq_data_dir}" gsutil -m cp -R \ gs://tapas_models/2021_07_22/nq_tables/* \ "${nq_data_dir}" ``` </pre>
 ---
 
 ## Installation
