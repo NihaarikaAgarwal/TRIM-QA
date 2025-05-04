@@ -44,6 +44,10 @@ Pruning reduces irrelevant context and improves the focus of downstream processi
   - Extracted from Wikipedia pages in the Google Natural Questions (NQ) benchmark.
   - ≈160k tables from 19,885 articles.
   - JSON schema allows exploration of structural components (rows vs. columns).
+ 
+    Downloading the dataset:
+    mkdir -p "${nq_data_dir}"
+    gsutil -m cp -R gs://tapas_models/2021_07_22/nq_tables/* "${nq_data_dir}
 
 ---
 
