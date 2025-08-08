@@ -884,6 +884,88 @@
                 </div>
             </div>
         </section>
+        <!-- ...existing code... -->
+
+        <!-- Slide: Query Enrichment Performance Table -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-2xl font-bold text-gray-800 border-b-4 border-indigo-500 pb-2 mb-6">
+                    Query Enrichment Performance Comparison
+                </h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full bg-white rounded-lg shadow border">
+                        <thead>
+                            <tr class="bg-indigo-100 text-indigo-800">
+                                <th class="px-4 py-2 font-semibold text-left">Type</th>
+                                <th class="px-4 py-2 font-semibold text-left">Query Example</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 10</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 15</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 20</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 30</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 50*</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-gray-700 text-sm">
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Raw</td>
+                                <td class="px-4 py-2">where does the brazos river start and stop</td>
+                                <td class="px-4 py-2 text-center">0.650 (597/919)</td>
+                                <td class="px-4 py-2 text-center">0.701 (644/919)</td>
+                                <td class="px-4 py-2 text-center">0.757 (696/919)</td>
+                                <td class="px-4 py-2 text-center">0.832 (765/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Decomposed*</td>
+                                <td class="px-4 py-2">where does the brazos river start and stop What are the source and mouth coordinates/locations of the Brazos River?</td>
+                                <td class="px-4 py-2 text-center">0.625 (574/919)</td>
+                                <td class="px-4 py-2 text-center">0.684 (629/919)</td>
+                                <td class="px-4 py-2 text-center">0.724 (665/919)</td>
+                                <td class="px-4 py-2 text-center">0.820 (754/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Struct+Domain</td>
+                                <td class="px-4 py-2">Find a table with columns for river name, starting location, ending location, source coordinates, and mouth coordinates about the Brazos River.</td>
+                                <td class="px-4 py-2 text-center">0.629 (578/919)</td>
+                                <td class="px-4 py-2 text-center">0.691 (635/919)</td>
+                                <td class="px-4 py-2 text-center">0.736 (676/919)</td>
+                                <td class="px-4 py-2 text-center">0.825 (758/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Struct</td>
+                                <td class="px-4 py-2">Find a table with columns for river name, starting point coordinates, ending point coordinates, source location, and mouth location.</td>
+                                <td class="px-4 py-2 text-center">0.612 (562/919)</td>
+                                <td class="px-4 py-2 text-center">0.682 (627/919)</td>
+                                <td class="px-4 py-2 text-center">0.743 (683/919)</td>
+                                <td class="px-4 py-2 text-center">0.824 (757/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Expanded</td>
+                                <td class="px-4 py-2">Could you provide information on where the Brazos River begins and ends, as well as the coordinates or locations of its source and mouth?</td>
+                                <td class="px-4 py-2 text-center">0.651 (598/919)</td>
+                                <td class="px-4 py-2 text-center">0.690 (634/919)</td>
+                                <td class="px-4 py-2 text-center">0.739 (679/919)</td>
+                                <td class="px-4 py-2 text-center">0.829 (762/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Expanded+Entity</td>
+                                <td class="px-4 py-2"></td>
+                                <td class="px-4 py-2 text-center">0.605 (556/919)</td>
+                                <td class="px-4 py-2 text-center">0.659 (606/919)</td>
+                                <td class="px-4 py-2 text-center">0.713 (655/919)</td>
+                                <td class="px-4 py-2 text-center">0.783 (720/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="mt-4 text-xs text-gray-500">*All methods converge at Top-50 accuracy.</p>
+            </div>
+        </section>
 
         <!-- Slide 9: Query Enrichment - Ensemble Methods -->
         <section class="slide">
@@ -1027,8 +1109,8 @@
                                 <p><strong>Selection Logic:</strong></p>
                                 <ul class="ml-4 space-y-1">
                                     <li>• If gold rank ≤ 3: Use top (rank+1) tables as negatives</li>
-                                    <li>• If gold rank > 3: Use top 4 tables as negatives</li>
-                                    <li>• Maximum 3 hard negatives per query</li>
+                                    <li>• If gold rank > 3: Use top 2 tables as negatives</li>
+                                    <li>• Maximum 2 hard negatives per query</li>
                                 </ul>
                             </div>
                         </div>
@@ -1312,8 +1394,8 @@
                 <!-- Slide 15: CRAFT Comparison Results -->
         <section class="slide">
             <div class="slide-content">
-                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-green-500 pb-2 mb-6">CRAFT Comparison: Enhanced Model Performance</h2>
-                
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-green-500 pb-2 mb-6">CRAFT Comparison: Enhanced Model Performance (wrt CRAFT 3rd Stage)</h2>
+
                 <!-- Two Column Layout -->
                 <div class="grid grid-cols-2 gap-6 w-full max-w-7xl h-full">
                     
@@ -1533,7 +1615,7 @@
             <div class="slide-content">
                 <h1 class="title-text font-black text-gray-800">Thank You</h1>
                 <p class="mt-4 subtitle-text text-indigo-600 font-bold">Questions?</p>
-                <p class="mt-12 body-text text-gray-500">Contact: your.email@institution.edu</p>
+                <!-- <p class="mt-12 body-text text-gray-500">Contact: your.email@institution.edu</p> -->
             </div>
         </section>
 
