@@ -1,0 +1,1708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRIM: Research Presentation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for the presentation */
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* Slide container */
+        .slide-deck {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Individual slide styling */
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+            background: white;
+            opacity: 0;
+            transform: scale(0.95);
+            transition: opacity 0.6s ease-in-out, transform 0.6s ease-in-out;
+            visibility: hidden;
+            z-index: 1;
+            box-sizing: border-box;
+        }
+        
+        /* Active slide styles */
+        .slide.active {
+            opacity: 1;
+            transform: scale(1);
+            visibility: visible;
+            z-index: 10;
+        }
+        
+        /* Content container for better sizing */
+        .slide-content {
+            width: 100%;
+            max-width: 90vw;
+            height: 100%;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+        
+        /* Animated list items */
+        .animated-item {
+            opacity: 0;
+            transform: translateY(20px);
+            animation: fadeIn 0.5s forwards;
+        }
+
+        @keyframes fadeIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        /* Pipeline diagram styling */
+        .pipeline-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+        .pipeline-stage, .pipeline-arrow {
+            opacity: 0;
+            transform: scale(0.8);
+            animation: popIn 0.5s forwards;
+        }
+        .pipeline-stage {
+            background-color: #eef2ff;
+            color: #4338ca;
+            padding: 1rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 700;
+            border: 2px solid #c7d2fe;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+        .pipeline-arrow {
+            font-size: 2rem;
+            color: #9ca3af;
+            font-weight: 900;
+        }
+
+        @keyframes popIn {
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        /* Navigation buttons */
+        .nav-controls {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 1rem;
+            z-index: 20;
+        }
+        .nav-button {
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid #e5e7eb;
+            border-radius: 9999px;
+            padding: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .nav-button:hover {
+            background-color: #f3f4f6;
+            transform: translateY(-2px);
+        }
+        .nav-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .progress-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            height: 6px;
+            background-color: #4f46e5;
+            z-index: 20;
+            transition: width 0.3s ease;
+        }
+
+        /* Responsive text sizing */
+        .title-text {
+            font-size: clamp(3rem, 8vw, 8rem);
+        }
+        .subtitle-text {
+            font-size: clamp(1.5rem, 3vw, 3rem);
+        }
+        .heading-text {
+            font-size: clamp(2rem, 4vw, 4rem);
+        }
+        .body-text {
+            font-size: clamp(1.25rem, 2vw, 2rem);
+        }
+        .small-text {
+            font-size: clamp(1rem, 1.5vw, 1.5rem);
+        }
+
+        /* Grid adjustments for full screen */
+        .results-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            align-items: center;
+            width: 100%;
+            height: 70vh;
+        }
+
+        .inspiration-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            width: 100%;
+            margin-top: 2rem;
+        }
+
+        /* Chart container full height */
+        .chart-container {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        @media (max-width: 768px) {
+            .results-grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            .slide {
+                padding: 1rem;
+            }
+        }
+
+        /* Additional styles for pipeline comparison slide */
+        .pipeline-container .pipeline-stage {
+            font-size: 0.875rem;
+            padding: 0.75rem 1rem;
+            min-width: fit-content;
+            white-space: nowrap;
+        }
+
+        .pipeline-container .pipeline-arrow {
+            font-size: 1.5rem;
+            margin: 0 0.5rem;
+        }
+
+        /* Responsive adjustments for pipeline slides */
+        @media (max-width: 1024px) {
+            .pipeline-container {
+                flex-direction: column;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            
+            .pipeline-container .pipeline-arrow {
+                transform: rotate(90deg);
+                font-size: 1.2rem;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .pipeline-container .pipeline-stage {
+                font-size: 0.75rem;
+                padding: 0.5rem 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div class="slide-deck">
+
+        <!-- Slide 1: Title -->
+        <section class="slide active">
+            <div class="slide-content">
+                <h1 class="title-text font-black text-gray-800 tracking-tight">TRIM</h1>
+                <p class="mt-4 subtitle-text text-indigo-600 font-bold">Table Retrieval and Information Minimisation</p>
+                <p class="mt-12 body-text text-gray-500">Mayank Vyas, Inkita Tewari, Niharika Agarwal</p>
+                <p class="small-text text-gray-400">Arizona State University</p>
+            </div>
+        </section>
+
+        <!-- Slide 2: Motivation -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="heading-text font-bold text-gray-800 border-b-4 border-indigo-500 pb-2">Motivation</h2>
+                <ul class="mt-8 body-text text-gray-700 space-y-6 text-left w-full max-w-4xl">
+                    <li class="animated-item" style="animation-delay: 0.2s;">The challenge of information overload in vast tabular datasets.</li>
+                    <li class="animated-item" style="animation-delay: 0.4s;">Difficulty for users to pinpoint exact information from large, complex tables.</li>
+                    <li class="animated-item" style="animation-delay: 0.6s;">Existing retrieval systems often return whole tables, not just the relevant parts.</li>
+                    <li class="animated-item" style="animation-delay: 0.8s;">Need for a system that intelligently retrieves and simplifies tabular data.</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Slide 3: Inspiration -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="heading-text font-bold text-gray-800 border-b-4 border-indigo-500 pb-2">Inspiration</h2>
+                <p class="mt-6 body-text text-gray-600">Our work builds upon foundational research in several key areas:</p>
+                <div class="inspiration-grid">
+                    <div class="animated-item bg-gray-50 p-6 rounded-lg" style="animation-delay: 0.2s;">
+                        <h3 class="small-text font-bold text-indigo-700">Open-Domain Question Answering</h3>
+                        <p class="mt-2 text-gray-600">Inspired by models like BERT and T5 that understand natural language queries to find answers in text.</p>
+                    </div>
+                    <div class="animated-item bg-gray-50 p-6 rounded-lg" style="animation-delay: 0.4s;">
+                        <h3 class="small-text font-bold text-indigo-700">Semantic Table Search</h3>
+                        <p class="mt-2 text-gray-600">Building on CRAFT's cascaded retrieval approach that uses sparse embeddings for efficient table retrieval, achieving better performance than dense models while reducing computational costs. <em>(CRAFT, 2025)</em></p>
+                    </div>
+                    <div class="animated-item bg-gray-50 p-6 rounded-lg" style="animation-delay: 0.6s;">
+                        <h3 class="small-text font-bold text-indigo-700">Information Theory</h3>
+                        <p class="mt-2 text-gray-600">Applying principles of minimal information and entropy to reduce data without losing meaning.</p>
+                    </div>
+                    <div class="animated-item bg-gray-50 p-6 rounded-lg" style="animation-delay: 0.8s;">
+                        <h3 class="small-text font-bold text-indigo-700">Contrastive Learning Approach</h3>
+                        <p class="mt-2 text-gray-600">We trained a contrastive model using one positive and two negative table approach to learn better embedding representations for table-query matching.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 4: Dataset -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-blue-500 pb-2 mb-6">Dataset: NQ-Tables</h2>
+                
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-6xl h-full">
+                    
+                    <!-- Left Column: Dataset Description & Characteristics -->
+                    <div class="space-y-4">
+                        <!-- Dataset Description -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">About NQ-Tables</h3>
+                            <p class="text-sm text-gray-700 leading-relaxed">
+                                The <strong>NQ-Tables dataset</strong> is a benchmark designed for open-domain question answering systems that require information extraction from tables. It is a subset of the larger Natural Questions (NQ) dataset, which contains real user questions issued to Google Search and answers found on Wikipedia.
+                            </p>
+                        </div>
+
+                        <!-- Key Characteristics -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">Key Characteristics</h3>
+                            <ul class="space-y-2 text-sm text-gray-700">
+                                <li class="flex items-start">
+                                    <span class="text-blue-500 mr-2">•</span>
+                                    <span><strong>Real User Queries:</strong> Questions issued to Google Search by actual users</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <span class="text-blue-500 mr-2">•</span>
+                                    <span><strong>Wikipedia Tables:</strong> Answers derived from structured tables in Wikipedia</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <span class="text-blue-500 mr-2">•</span>
+                                    <span><strong>Diverse Domains:</strong> Covers a wide range of topics and table structures</span>
+                                </li>
+                                <li class="flex items-start">
+                                    <span class="text-blue-500 mr-2">•</span>
+                                    <span><strong>Complex Reasoning:</strong> Requires understanding of table structure and content</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Dataset Statistics -->
+                    <div class="space-y-4">
+                        <!-- Training Set Statistics -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.6s;">
+                            <div class="text-center mb-3">
+                                <h3 class="text-lg font-bold text-green-700">Training Set</h3>
+                                <div class="text-4xl font-black text-green-600 my-2">9,530</div>
+                                <p class="text-sm text-gray-600">Queries Used</p>
+                            </div>
+                            <div class="space-y-1 text-sm text-gray-700">
+                                <p><span class="font-semibold">Original Total:</span> 9,600+ queries</p>
+                                <p><span class="font-semibold">After Filtering:</span> 9,530 queries</p>
+                                <p class="text-xs text-gray-600 italic mt-2">
+                                    ✓ Filtered to include only queries with valid gold table rankings
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Test Set Statistics -->
+                        <div class="animated-item bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg border-l-4 border-orange-500" style="animation-delay: 0.8s;">
+                            <div class="text-center mb-3">
+                                <h3 class="text-lg font-bold text-orange-700">Test Set</h3>
+                                <div class="text-4xl font-black text-orange-600 my-2">899</div>
+                                <p class="text-sm text-gray-600">Final Queries</p>
+                            </div>
+                            <div class="space-y-1 text-sm text-gray-700">
+                                <p><span class="font-semibold">Original Total:</span> 966 queries</p>
+                                <p><span class="font-semibold">After Filtering:</span> 899 queries</p>
+                                <p class="text-xs text-gray-600 italic mt-2">
+                                    ✓ Removed duplicates and queries without gold table rankings
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Dataset Summary -->
+                        <div class="animated-item bg-gradient-to-r from-gray-50 to-gray-100 p-3 rounded-lg border-l-4 border-gray-400" style="animation-delay: 1.0s;">
+                            <div class="text-center">
+                                <h4 class="text-sm font-bold text-gray-700 mb-2">Total Dataset Size</h4>
+                                <div class="flex justify-center items-center space-x-3">
+                                    <div class="text-center">
+                                        <div class="text-xl font-bold text-gray-600">10,429</div>
+                                        <div class="text-xs text-gray-500">Total Queries</div>
+                                    </div>
+                                    <div class="text-gray-400">+</div>
+                                    <div class="text-center">
+                                        <div class="text-xl font-bold text-gray-600">Tables</div>
+                                        <div class="text-xs text-gray-500">From Wikipedia</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 5: Stage 1 - Table Pruning -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-indigo-500 pb-2 mb-6"><span class="text-indigo-600">Stage 1:</span> Table Pruning</h2>
+                
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-6xl h-full">
+                    
+                    <!-- Left Column: Row-Based Pruning -->
+                    <div class="space-y-4">
+                        <!-- Row-Based Pruning -->
+                        <div class="animated-item bg-gradient-to-r from-indigo-50 to-indigo-100 p-4 rounded-lg border-l-4 border-indigo-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-indigo-700 mb-3">Row-Based Pruning</h3>
+                            <p class="text-sm text-gray-700 mb-3">We tested 3 types of row chunks:</p>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <div class="flex items-start">
+                                    <span class="text-red-500 mr-2">1.</span>
+                                    <span>Only row data (no metadata)</span>
+                                </div>
+                                <div class="flex items-start">
+                                    <span class="text-green-500 mr-2 font-bold">2.</span>
+                                    <span><strong>Table title + row data</strong> ✓ Best Results</span>
+                                </div>
+                                <div class="flex items-start">
+                                    <span class="text-orange-500 mr-2">3.</span>
+                                    <span>Table title + row data + column names</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Model & Dataset -->
+                        <div class="animated-item bg-gradient-to-r from-indigo-50 to-indigo-100 p-4 rounded-lg border-l-4 border-indigo-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-indigo-700 mb-3">Implementation Details</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p><strong>Test Dataset:</strong> 919 test queries</p>
+                                <p><strong>Tables per Query:</strong> Top 50 (CRAFT SPLADE retrieval)</p>
+                                <p><strong>Embedding Model:</strong> sentence-transformers/paraphrase-multilingual-mpnet-base-v2</p>
+                                <p><strong>Process:</strong> Generate dense embeddings for row chunks and query, score each row</p>
+                            </div>
+                        </div>
+
+                        <!-- Benefits -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3">Key Benefits</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p>• <strong>Reduced table size</strong> allows feeding LLM more tables</p>
+                                <p>• <strong>Maintained context size</strong> while reducing noise</p>
+                                <p>• <strong>Improved efficiency</strong> in downstream processing</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Reranking & Future Work -->
+                    <div class="space-y-4">
+                        <!-- Reranking Models -->
+                        <div class="animated-item bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg border-l-4 border-purple-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-purple-700 mb-3">Reranking Models Tested</h3>
+                            <div class="space-y-3">
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="text-sm font-semibold text-gray-800">sentence-transformers/paraphrase-multilingual-mpnet-base-v2</p>
+                                    <p class="text-xs text-gray-600">Dense embedding model for similarity scoring</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="text-sm font-semibold text-gray-800">jina-reranker-v2-base-multilingual</p>
+                                    <p class="text-xs text-gray-600">Specialized reranking model</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Future Tests -->
+                        <div class="animated-item bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg border-l-4 border-orange-500" style="animation-delay: 1.0s;">
+                            <h3 class="text-lg font-bold text-orange-700 mb-3">Future Tests</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <div class="flex items-start">
+                                    <span class="text-orange-500 mr-2">•</span>
+                                    <span>Testing row pruning on other tabular datasets</span>
+                                </div>
+                                <div class="flex items-start">
+                                    <span class="text-orange-500 mr-2">•</span>
+                                    <span>Try column pruning and test its effects on table reranking</span>
+                                </div>
+                                <div class="flex items-start">
+                                    <span class="text-orange-500 mr-2">•</span>
+                                    <span>Evaluate combined row + column pruning strategies</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Process Flow -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-3 rounded-lg border-l-4 border-blue-500" style="animation-delay: 1.2s;">
+                            <h3 class="text-sm font-bold text-blue-700 mb-2">Process Flow</h3>
+                            <div class="flex flex-col space-y-2">
+                                <!-- First Row -->
+                                <div class="flex items-center justify-center space-x-2">
+                                    <div class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded text-center">CRAFT SPLADE</div>
+                                    <div class="text-xs text-blue-600">→</div>
+                                    <div class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded text-center">Top 50 Tables</div>
+                                    <div class="text-xs text-blue-600">→</div>
+                                    <div class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded text-center">Row Chunking</div>
+                                </div>
+                                
+                                <!-- Arrow down -->
+                                <div class="flex justify-end pr-4">
+                                    <div class="text-xs text-blue-600">↓</div>
+                                </div>
+                                
+                                <!-- Second Row (flows right to left) -->
+                                <div class="flex items-center justify-center space-x-2">
+                                    <div class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded text-center">Pruned Tables</div>
+                                    <div class="text-xs text-blue-600">←</div>
+                                    <div class="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded text-center">Dense Embedding</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 6: Table Pruning Results -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-green-500 pb-2 mb-6">Table Pruning Results</h2>
+                
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-6xl h-full">
+                    
+                    <!-- Left Column: Pruning Performance -->
+                    <div class="space-y-4">
+                        <!-- Retention vs Target Presence -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3">Row Retention vs Target Table Presence</h3>
+                            <div class="bg-white p-3 rounded">
+                                <table class="w-full text-sm">
+                                    <thead>
+                                        <tr class="border-b border-gray-200">
+                                            <th class="text-left py-2 text-green-700">% Rows Retained</th>
+                                            <th class="text-left py-2 text-green-700">Target Table Present</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="text-gray-700">
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1">5%</td>
+                                            <td class="py-1 font-semibold">76.82%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1">10%</td>
+                                            <td class="py-1 font-semibold">82.26%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1">15%</td>
+                                            <td class="py-1 font-semibold">84.98%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1">20%</td>
+                                            <td class="py-1 font-semibold">86.29%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1">25%</td>
+                                            <td class="py-1 font-semibold">87.60%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1">30%</td>
+                                            <td class="py-1 font-semibold">88.36%</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="py-1">50%</td>
+                                            <td class="py-1 font-semibold text-green-600">90.10%</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p class="text-xs text-gray-600 mt-2 italic">
+                                Higher retention rates maintain more target tables but increase noise
+                            </p>
+                        </div>
+
+                        <!-- Key Insights -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">Key Insights</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p>• <strong>Trade-off:</strong> Lower retention = less noise but some target table loss</p>
+                                <p>• <strong>Sweet spot:</strong> 20-30% retention balances efficiency and recall</p>
+                                <p>• <strong>Significant reduction:</strong> 70-80% of rows can be safely pruned</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Model Comparison -->
+                    <div class="space-y-4">
+                        <!-- Before Pruning Performance -->
+                        <div class="animated-item bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg border-l-4 border-purple-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-purple-700 mb-3">Reranking Performance (Before Pruning)</h3>
+                            <div class="bg-white p-3 rounded">
+                                <table class="w-full text-sm">
+                                    <thead>
+                                        <tr class="border-b border-gray-200">
+                                            <th class="text-left py-2 text-purple-700">Top k</th>
+                                            <th class="text-left py-2 text-purple-700">MPNET</th>
+                                            <th class="text-left py-2 text-purple-700">JINA AI</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="text-gray-700">
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1 font-semibold">1</td>
+                                            <td class="py-1">36.89%</td>
+                                            <td class="py-1 font-semibold text-purple-600">46.35%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1 font-semibold">3</td>
+                                            <td class="py-1">56.47%</td>
+                                            <td class="py-1 font-semibold text-purple-600">67.68%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1 font-semibold">5</td>
+                                            <td class="py-1">65.51%</td>
+                                            <td class="py-1 font-semibold text-purple-600">75.41%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-1 font-semibold">10</td>
+                                            <td class="py-1">76.39%</td>
+                                            <td class="py-1 font-semibold text-purple-600">82.37%</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="py-1 font-semibold">20</td>
+                                            <td class="py-1">84.55%</td>
+                                            <td class="py-1 font-semibold text-purple-600">86.62%</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p class="text-xs text-gray-600 mt-2 italic">
+                                JINA AI consistently outperforms MPNET across all k values
+                            </p>
+                        </div>
+
+                        <!-- Performance Analysis
+                        <div class="animated-item bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg border-l-4 border-orange-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-orange-700 mb-3">Performance Analysis</h3>
+                            <div class="space-y-3">
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-orange-800 mb-1">JINA AI Reranker</h4>
+                                    <p class="text-xs text-gray-600">• Specialized reranking architecture</p>
+                                    <p class="text-xs text-gray-600">• ~9-11% improvement over MPNET</p>
+                                    <p class="text-xs text-gray-600">• Best performance at Top-1: 46.35%</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-orange-800 mb-1">MPNET</h4>
+                                    <p class="text-xs text-gray-600">• General-purpose embedding model</p>
+                                    <p class="text-xs text-gray-600">• Consistent but lower performance</p>
+                                    <p class="text-xs text-gray-600">• More computationally efficient</p>
+                                </div>
+                            </div>
+                        </div> -->
+
+                        <!-- Summary -->
+                        <!-- <div class="animated-item bg-gradient-to-r from-gray-50 to-gray-100 p-3 rounded-lg border-l-4 border-gray-400" style="animation-delay: 1.0s;">
+                            <h4 class="text-sm font-bold text-gray-700 mb-2">Summary</h4>
+                            <p class="text-xs text-gray-600">
+                                Table pruning effectively reduces computational overhead while maintaining high recall rates. 
+                                JINA AI reranker shows superior performance, making it the preferred choice for reranking pruned tables.
+                            </p>
+                        </div> -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 7: Table Pruning Results - Post Pruning Performance -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-green-500 pb-2 mb-6">Post-Pruning Reranking Performance</h2>
+                
+                <!-- Single Column Layout for the large table -->
+                <div class="w-full max-w-7xl h-full flex flex-col space-y-6">
+                    
+                    <!-- Performance Table -->
+                    <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.2s;">
+                        <h3 class="text-lg font-bold text-green-700 mb-3 text-center">Model Performance at Different Row Retention Rates</h3>
+                        <div class="bg-white p-4 rounded overflow-x-auto">
+                            <table class="w-full text-sm border-collapse">
+                                <thead>
+                                    <tr class="border-b-2 border-gray-300">
+                                        <th rowspan="2" class="text-left py-3 px-2 text-green-700 font-bold border-r border-gray-200">Top k</th>
+                                        <th colspan="2" class="text-center py-2 px-2 text-green-700 font-bold border-r border-gray-200">15% Rows Retained</th>
+                                        <th colspan="2" class="text-center py-2 px-2 text-green-700 font-bold border-r border-gray-200">30% Rows Retained</th>
+                                        <th colspan="2" class="text-center py-2 px-2 text-green-700 font-bold border-r border-gray-200">50% Rows Retained</th>
+                                        <th colspan="2" class="text-center py-2 px-2 text-green-700 font-bold">70% Rows Retained</th>
+                                    </tr>
+                                    <tr class="border-b border-gray-200">
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-100">MPNET</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-200">JINA AI</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-100">MPNET</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-200">JINA AI</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-100">MPNET</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-200">JINA AI</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs border-r border-gray-100">MPNET</th>
+                                        <th class="text-center py-2 px-2 text-gray-600 text-xs">JINA AI</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="text-gray-700">
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-2 font-semibold border-r border-gray-200">1</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">29.16%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">43.96%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">31.12%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">44.40%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">32.64%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">44.72%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">33.41%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">44.72%</td>
+                                    </tr>
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-2 font-semibold border-r border-gray-200">3</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">50.38%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">66.27%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">51.58%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">65.61%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">52.23%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">66.27%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">52.99%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">66.27%</td>
+                                    </tr>
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-2 font-semibold border-r border-gray-200">5</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">60.83%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">74.76%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">61.15%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">73.23%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">61.70%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600 border-r border-gray-200">74.10%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">61.92%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">74.43%</td>
+                                    </tr>
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-2 font-semibold border-r border-gray-200">10</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">72.69%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">80.96%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">72.14%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">81.72%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">72.58%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">82.92%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">73.67%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">82.59%</td>
+                                    </tr>
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="py-2 px-2 font-semibold border-r border-gray-200">20</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">82.81%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">84.33%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">83.24%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">86.72%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">82.81%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">87.38%</td>
+                                        <td class="py-2 px-2 text-center border-r border-gray-100">83.03%</td>
+                                        <td class="py-2 px-2 text-center font-semibold text-purple-600">87.70%</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Analysis Grid -->
+                    <div class="grid grid-cols-3 gap-4">
+                        <!-- Key Findings -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">Key Findings</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p>• <strong>Consistent JINA superiority:</strong> Outperforms MPNET across all retention rates</p>
+                                <p>• <strong>Minimal performance loss:</strong> Even with 85% row reduction, performance remains strong</p>
+                                <!-- <p>• <strong>Efficiency gains:</strong> 70% less data processed with comparable results</p> -->
+                            </div>
+                        </div>
+
+                        <!-- Performance Trends -->
+                        <div class="animated-item bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg border-l-4 border-orange-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-orange-700 mb-3">Performance Trends</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p>• <strong>Gradual improvement:</strong> Higher retention → better performance</p>
+                                <p>• <strong>Diminishing returns:</strong> Gains plateau after 50% retention</p>
+                                <p>• <strong>Top-1 impact:</strong> Pruning affects precision more than recall</p>
+                            </div>
+                        </div>
+
+                        <!-- Optimal Configuration -->
+                        <div class="animated-item bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg border-l-4 border-purple-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-purple-700 mb-3">Optimal Configuration</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p>• <strong>Recommended:</strong> 30-50% row retention</p>
+                                <p>• <strong>Model choice:</strong> JINA AI reranker</p>
+                                <p>• <strong>Best balance:</strong> Efficiency vs performance trade-off</p>
+                                <p class="text-xs italic text-purple-600">50% retention: 44.72% Top-1 with 50% data reduction</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 8: Stage 2 - Query Enrichment -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-indigo-500 pb-2 mb-6"><span class="text-indigo-600">Stage 2:</span> Query Enrichment</h2>
+                
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-6xl h-full">
+                    
+                    <!-- Left Column: Query Types -->
+                    <div class="space-y-4">
+                        <!-- Query Enrichment Types -->
+                        <div class="animated-item bg-gradient-to-r from-indigo-50 to-indigo-100 p-4 rounded-lg border-l-4 border-indigo-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-indigo-700 mb-3">Query Enrichment Types</h3>
+                            <div class="space-y-3 text-sm text-gray-700">
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-gray-800"><span class="text-blue-600">Raw:</span> Original query</p>
+                                    <p class="text-xs text-gray-600 italic">Basic user input without modification</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-gray-800"><span class="text-green-600">Decomposed*:</span> Query breakdown</p>
+                                    <p class="text-xs text-gray-600 italic">Complex queries split into simpler components</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-gray-800"><span class="text-purple-600">Struct+Domain:</span> Structure + domain info</p>
+                                    <p class="text-xs text-gray-600 italic">Includes table structure and domain knowledge</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-gray-800"><span class="text-orange-600">Struct:</span> Structure only</p>
+                                    <p class="text-xs text-gray-600 italic">Focus on table structure information</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-gray-800"><span class="text-pink-600">Expanded:</span> Enhanced query</p>
+                                    <p class="text-xs text-gray-600 italic">Expanded with additional context and detail</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-gray-800"><span class="text-red-600">Expanded+Entity:</span> Entity enriched</p>
+                                    <p class="text-xs text-gray-600 italic">Expanded with entity information</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Query Example Header -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-3 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-sm font-bold text-green-700 mb-2">Base Query Example:</h3>
+                            <p class="text-sm font-semibold text-gray-800">"Where does the Brazos River start and stop?"</p>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Query Examples -->
+                    <div class="space-y-4">
+                        <!-- Query Examples -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">Query Enrichment Examples</h3>
+                            <div class="space-y-3 text-xs text-gray-700">
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-blue-600 mb-1">Raw:</p>
+                                    <p class="italic">"where does the brazos river start and stop"</p>
+                                </div>
+                                
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-green-600 mb-1">Decomposed:</p>
+                                    <p class="italic">"What are the source and mouth coordinates/locations of the Brazos River?"</p>
+                                </div>
+                                
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-purple-600 mb-1">Struct+Domain:</p>
+                                    <p class="italic">"Find a table with columns for river name, starting location, ending location, source coordinates, and mouth coordinates about the Brazos River."</p>
+                                </div>
+                                
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-orange-600 mb-1">Struct:</p>
+                                    <p class="italic">"Find a table with columns for river name, starting point coordinates, ending point coordinates, source location, and mouth location."</p>
+                                </div>
+                                
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-pink-600 mb-1">Expanded:</p>
+                                    <p class="italic">"Could you provide information on where the Brazos River begins and ends, as well as the coordinates or locations of its source and mouth?"</p>
+                                </div>
+                                
+                                <div class="bg-white p-3 rounded border">
+                                    <p class="font-semibold text-red-600 mb-1">Expanded+Entity:</p>
+                                    <p class="italic">"Could you provide information on where the Brazos River begins and ends, as well as the coordinates or locations of its source and mouth?"</p>
+                                </div>
+                            </div>
+                        </div>
+
+    
+                    </div>
+                </div>
+            </div>
+        </section>
+        <!-- ...existing code... -->
+
+        <!-- Slide: Query Enrichment Performance Table -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-2xl font-bold text-gray-800 border-b-4 border-indigo-500 pb-2 mb-6">
+                    Query Enrichment Performance Comparison
+                </h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full bg-white rounded-lg shadow border">
+                        <thead>
+                            <tr class="bg-indigo-100 text-indigo-800">
+                                <th class="px-4 py-2 font-semibold text-left">Type</th>
+                                <th class="px-4 py-2 font-semibold text-left">Query Example</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 10</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 15</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 20</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 30</th>
+                                <th class="px-4 py-2 font-semibold text-center">Top 50*</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-gray-700 text-sm">
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Raw</td>
+                                <td class="px-4 py-2">where does the brazos river start and stop</td>
+                                <td class="px-4 py-2 text-center">0.650 (597/919)</td>
+                                <td class="px-4 py-2 text-center">0.701 (644/919)</td>
+                                <td class="px-4 py-2 text-center">0.757 (696/919)</td>
+                                <td class="px-4 py-2 text-center">0.832 (765/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Decomposed*</td>
+                                <td class="px-4 py-2">where does the brazos river start and stop What are the source and mouth coordinates/locations of the Brazos River?</td>
+                                <td class="px-4 py-2 text-center">0.625 (574/919)</td>
+                                <td class="px-4 py-2 text-center">0.684 (629/919)</td>
+                                <td class="px-4 py-2 text-center">0.724 (665/919)</td>
+                                <td class="px-4 py-2 text-center">0.820 (754/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Struct+Domain</td>
+                                <td class="px-4 py-2">Find a table with columns for river name, starting location, ending location, source coordinates, and mouth coordinates about the Brazos River.</td>
+                                <td class="px-4 py-2 text-center">0.629 (578/919)</td>
+                                <td class="px-4 py-2 text-center">0.691 (635/919)</td>
+                                <td class="px-4 py-2 text-center">0.736 (676/919)</td>
+                                <td class="px-4 py-2 text-center">0.825 (758/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Struct</td>
+                                <td class="px-4 py-2">Find a table with columns for river name, starting point coordinates, ending point coordinates, source location, and mouth location.</td>
+                                <td class="px-4 py-2 text-center">0.612 (562/919)</td>
+                                <td class="px-4 py-2 text-center">0.682 (627/919)</td>
+                                <td class="px-4 py-2 text-center">0.743 (683/919)</td>
+                                <td class="px-4 py-2 text-center">0.824 (757/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Expanded</td>
+                                <td class="px-4 py-2">Could you provide information on where the Brazos River begins and ends, as well as the coordinates or locations of its source and mouth?</td>
+                                <td class="px-4 py-2 text-center">0.651 (598/919)</td>
+                                <td class="px-4 py-2 text-center">0.690 (634/919)</td>
+                                <td class="px-4 py-2 text-center">0.739 (679/919)</td>
+                                <td class="px-4 py-2 text-center">0.829 (762/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2 font-bold">Expanded+Entity</td>
+                                <td class="px-4 py-2"></td>
+                                <td class="px-4 py-2 text-center">0.605 (556/919)</td>
+                                <td class="px-4 py-2 text-center">0.659 (606/919)</td>
+                                <td class="px-4 py-2 text-center">0.713 (655/919)</td>
+                                <td class="px-4 py-2 text-center">0.783 (720/919)</td>
+                                <td class="px-4 py-2 text-center">0.911 (837/919)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="mt-4 text-xs text-gray-500">*All methods converge at Top-50 accuracy.</p>
+            </div>
+        </section>
+
+        <!-- Slide 9: Query Enrichment - Ensemble Methods -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-purple-500 pb-2 mb-6">Query Enrichment: Ensemble Methods</h2>
+                
+                <!-- Single Column Layout for the ensemble results -->
+                <div class="w-full max-w-6xl h-full flex flex-col space-y-6">
+                    
+                    <!-- Method Description -->
+                    <div class="animated-item bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg border-l-4 border-purple-500" style="animation-delay: 0.2s;">
+                        <h3 class="text-lg font-bold text-purple-700 mb-3 text-center">Ensemble Approach: Expansion + Decomposition</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="bg-white p-4 rounded">
+                                <h4 class="text-sm font-bold text-purple-800 mb-2">Conditional Fusion Strategy</h4>
+                                <p class="text-sm text-gray-700">Combines expanded and decomposed queries using confidence thresholds</p>
+                                <p class="text-xs text-gray-600 italic mt-2">Threshold values: 0.1, 0.05, 0.01, 0.005</p>
+                            </div>
+                            <div class="bg-white p-4 rounded">
+                                <h4 class="text-sm font-bold text-purple-800 mb-2">Implementation</h4>
+                                <p class="text-sm text-gray-700">sentence-transformers/paraphrase-multilingual-mpnet-base-v2</p>
+                                <p class="text-xs text-gray-600 italic mt-2">919 test queries evaluated</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Performance Table -->
+                    <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.4s;">
+                        <h3 class="text-lg font-bold text-green-700 mb-3 text-center">Ensemble Performance Results</h3>
+                        <div class="bg-white p-4 rounded overflow-x-auto">
+                            <table class="w-full text-sm border-collapse">
+                                <thead>
+                                    <tr class="border-b-2 border-gray-300">
+                                        <th class="text-left py-3 px-3 text-green-700 font-bold">Top k</th>
+                                        <th class="text-center py-3 px-3 text-green-700 font-bold">Average<br/>(expansion+decompose)</th>
+                                        <th class="text-center py-3 px-3 text-green-700 font-bold">Conditional Fusion<br/>Threshold=0.1</th>
+                                        <th class="text-center py-3 px-3 text-green-700 font-bold">Conditional Fusion<br/>Threshold=0.05</th>
+                                        <th class="text-center py-3 px-3 text-green-700 font-bold">Conditional Fusion<br/>Threshold=0.01</th>
+                                        <th class="text-center py-3 px-3 text-green-700 font-bold">Conditional Fusion<br/>Threshold=0.005</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="text-gray-700">
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-3 font-semibold">10</td>
+                                        <td class="py-2 px-3 text-center">0.605 (556/919)</td>
+                                        <td class="py-2 px-3 text-center">0.638 (586/919)</td>
+                                        <td class="py-2 px-3 text-center">0.642 (590/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-purple-600">0.650 (597/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-purple-600">0.650 (597/919)</td>
+                                    </tr>
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-3 font-semibold">15</td>
+                                        <td class="py-2 px-3 text-center">0.659 (606/919)</td>
+                                        <td class="py-2 px-3 text-center">0.701 (644/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-purple-600">0.704 (647/919)</td>
+                                        <td class="py-2 px-3 text-center">0.701 (644/919)</td>
+                                        <td class="py-2 px-3 text-center">0.701 (644/919)</td>
+                                    </tr>
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-3 font-semibold">20</td>
+                                        <td class="py-2 px-3 text-center">0.713 (655/919)</td>
+                                        <td class="py-2 px-3 text-center">0.755 (694/919)</td>
+                                        <td class="py-2 px-3 text-center">0.754 (693/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-purple-600">0.757 (696/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-purple-600">0.757 (696/919)</td>
+                                    </tr>
+                                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                        <td class="py-2 px-3 font-semibold">30</td>
+                                        <td class="py-2 px-3 text-center">0.783 (720/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-purple-600">0.835 (767/919)</td>
+                                        <td class="py-2 px-3 text-center">0.829 (762/919)</td>
+                                        <td class="py-2 px-3 text-center">0.832 (765/919)</td>
+                                        <td class="py-2 px-3 text-center">0.832 (765/919)</td>
+                                    </tr>
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="py-2 px-3 font-semibold">50*</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-blue-600">0.911 (837/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-blue-600">0.911 (837/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-blue-600">0.911 (837/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-blue-600">0.911 (837/919)</td>
+                                        <td class="py-2 px-3 text-center font-semibold text-blue-600">0.911 (837/919)</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 10: Query Enrichment - Performance Visualization -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-green-500 pb-2 mb-6">Query Enrichment: Performance Visualization</h2>
+                
+                <!-- Single Column Layout for the plot -->
+                <div class="w-full max-w-6xl h-full flex flex-col space-y-6">
+                    
+                    <!-- Plot Container -->
+                    <div class="animated-item bg-gradient-to-r from-gray-50 to-gray-100 p-6 rounded-lg border-l-4 border-gray-400 flex-1" style="animation-delay: 0.2s;">
+                        <h3 class="text-lg font-bold text-gray-700 mb-4 text-center">Performance Comparison Across Query Enrichment Methods</h3>
+                        
+                        <!-- Actual Plot -->
+                        <div class="bg-white p-4 rounded-lg shadow-md border h-full flex items-center justify-center">
+                            <img src="Final_Recall_QueryRewrite_CleanTitle.png" 
+                                 alt="Query Enrichment Performance Comparison Chart" 
+                                 class="max-w-full max-h-full object-contain rounded">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+                <!-- Slide 12: Stage 3 - Contrastive Learning -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-purple-500 pb-2 mb-6"><span class="text-purple-600">Stage 3:</span> Contrastive Learning</h2>
+                
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-6xl h-full">
+                    
+                    <!-- Left Column: Approach Overview -->
+                    <div class="space-y-4">
+                        <!-- Contrastive Learning Approach -->
+                        <div class="animated-item bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg border-l-4 border-purple-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-purple-700 mb-3">Contrastive Learning Approach</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p>• <strong>Objective:</strong> Learn embeddings that bring relevant query-table pairs closer while pushing irrelevant pairs apart</p>
+                                <p>• <strong>Architecture:</strong> Triplet loss with neural ranking model</p>
+                                <p>• <strong>Training Data:</strong> Query-positive-negative triplets from CRAFT results</p>
+                                <p>• <strong>Embedding Types:</strong> Both sparse (SPLADE) and dense (E5) embeddings tested</p>
+                            </div>
+                        </div>
+
+                        <!-- Triplet Formation Strategy -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">Triplet Formation Strategy</h3>
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p><strong>Positive Examples:</strong> Gold tables for each query</p>
+                                <p><strong>Hard Negatives:</strong> Tables ranked above gold table in CRAFT results</p>
+                                <p><strong>Selection Logic:</strong></p>
+                                <ul class="ml-4 space-y-1">
+                                    <li>• If gold rank ≤ 3: Use top (rank+1) tables as negatives</li>
+                                    <li>• If gold rank > 3: Use top 2 tables as negatives</li>
+                                    <li>• Maximum 2 hard negatives per query</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- References -->
+                        <div class="animated-item bg-gradient-to-r from-gray-50 to-gray-100 p-4 rounded-lg border-l-4 border-gray-400" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-gray-700 mb-3">References</h3>
+                            <div class="space-y-2 text-xs text-gray-600">
+                                <p>• <strong>CRAFT Paper:</strong> <a href="https://dl.acm.org/doi/pdf/10.1145/3726302.3730245" class="text-blue-600 underline">ACM Digital Library</a></p>
+                                <p>• <strong>Contrastive Learning:</strong> <a href="https://arxiv.org/abs/2507.08336" class="text-blue-600 underline">arXiv:2507.08336</a></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Implementation Details -->
+                    <div class="space-y-4">
+                        <!-- Dataset Preparation -->
+                        <div class="animated-item bg-gradient-to-r from-indigo-50 to-indigo-100 p-4 rounded-lg border-l-4 border-indigo-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-indigo-700 mb-3">Dataset Preparation</h3>
+                            <div class="space-y-3">
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-indigo-800 mb-1">Data Source</h4>
+                                    <p class="text-xs text-gray-600">CRAFT_NQ_TEST_1st_Stage_results.json</p>
+                                    <p class="text-xs text-gray-600">Contains ranked table results for each query</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-indigo-800 mb-1">Triplet Structure</h4>
+                                    <p class="text-xs text-gray-600"><strong>Query:</strong> Original user question</p>
+                                    <p class="text-xs text-gray-600"><strong>Positive:</strong> Gold table (ground truth)</p>
+                                    <p class="text-xs text-gray-600"><strong>Negatives:</strong> 2-3 hard negative tables</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Models Tested -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 1.0s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3">Embedding Models Tested</h3>
+                            <div class="space-y-3">
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-green-800 mb-1">SPLADE (Sparse)</h4>
+                                    <p class="text-xs text-gray-600">naver/splade-cocondenser-ensembledistil</p>
+                                    <p class="text-xs text-gray-600">Sparse learned representations with ReLU + log transformations</p>
+                                </div>
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-green-800 mb-1">E5 (Dense)</h4>
+                                    <p class="text-xs text-gray-600">intfloat/e5-large-v2</p>
+                                    <p class="text-xs text-gray-600">Dense embeddings with query/passage prefixes</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 13: Contrastive Learning Results - Embedding Analysis -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-purple-500 pb-2 mb-6">Contrastive Learning: Embedding Analysis</h2>
+                
+                <!-- Single Column Layout for the plots -->
+                <div class="w-full max-w-7xl h-full flex flex-col space-y-6">
+                    
+                    <!-- Two Plots Side by Side -->
+                    <div class="grid grid-cols-2 gap-6">
+                        <!-- SPLADE Embeddings Plot -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3 text-center">SPLADE Embeddings Analysis</h3>
+                            <!-- Actual SPLADE Plot -->
+                            <div class="bg-white p-4 rounded-lg shadow-md border h-80 flex items-center justify-center">
+                                <img src="embedding-output-Splade-before-training.png" 
+                                     alt="SPLADE Embedding Analysis - Query-Table Relationships" 
+                                     class="max-w-full max-h-full object-contain rounded">
+                            </div>
+                        </div>
+
+                        <!-- E5 Embeddings Plot -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3 text-center">E5 Embeddings Analysis</h3>
+                            <!-- Actual E5 Plot -->
+                            <div class="bg-white p-4 rounded-lg shadow-md border h-80 flex items-center justify-center">
+                                <img src="embedding-output-e5-before-training.png" 
+                                     alt="E5 Embedding Analysis - Query-Table Relationships" 
+                                     class="max-w-full max-h-full object-contain rounded">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Statistics Comparison -->
+                    <div class="grid grid-cols-2 gap-6">
+                        <!-- SPLADE Statistics -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">SPLADE Embedding Statistics</h3>
+                            
+                            <!-- Distance Statistics -->
+                            <div class="bg-white p-4 rounded mb-3">
+                                <h4 class="text-sm font-bold text-blue-800 mb-2">Distance Statistics</h4>
+                                <div class="space-y-1 text-sm text-gray-700">
+                                    <p><strong>Average Query-Positive Distance:</strong> <span class="font-mono">6.5305</span></p>
+                                    <p><strong>Average Query-Negative Distance:</strong> <span class="font-mono">6.2974</span></p>
+                                    <p><strong>Query-Positive / Query-Negative Ratio:</strong> <span class="font-mono text-orange-600">1.0370</span></p>
+                                </div>
+                            </div>
+
+                            <!-- Similarity Statistics -->
+                            <div class="bg-white p-4 rounded">
+                                <h4 class="text-sm font-bold text-blue-800 mb-2">Similarity Statistics</h4>
+                                <div class="space-y-1 text-sm text-gray-700">
+                                    <p><strong>Average Query-Positive Similarity:</strong> <span class="font-mono">0.9059</span></p>
+                                    <p><strong>Average Query-Negative Similarity:</strong> <span class="font-mono">0.9077</span></p>
+                                    <p><strong>Similarity Difference (Pos - Neg):</strong> <span class="font-mono text-red-600">-0.0018</span></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- E5 Statistics -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3">E5 Embedding Statistics</h3>
+                            
+                            <!-- Distance Statistics -->
+                            <div class="bg-white p-4 rounded mb-3">
+                                <h4 class="text-sm font-bold text-green-800 mb-2">Distance Statistics</h4>
+                                <div class="space-y-1 text-sm text-gray-700">
+                                    <p><strong>Average Query-Positive Distance:</strong> <span class="font-mono">0.6432</span></p>
+                                    <p><strong>Average Query-Negative Distance:</strong> <span class="font-mono">0.6724</span></p>
+                                    <p><strong>Query-Positive / Query-Negative Ratio:</strong> <span class="font-mono text-green-600">0.9566</span></p>
+                                </div>
+                            </div>
+
+                            <!-- Similarity Statistics -->
+                            <div class="bg-white p-4 rounded">
+                                <h4 class="text-sm font-bold text-green-800 mb-2">Similarity Statistics</h4>
+                                <div class="space-y-1 text-sm text-gray-700">
+                                    <p><strong>Average Query-Positive Similarity:</strong> <span class="font-mono">0.7915</span></p>
+                                    <p><strong>Average Query-Negative Similarity:</strong> <span class="font-mono">0.7712</span></p>
+                                    <p><strong>Similarity Difference (Pos - Neg):</strong> <span class="font-mono text-green-600">0.0203</span></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 14: Training Architecture & Results -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-indigo-500 pb-2 mb-6">Neural Architecture & Training Results</h2>
+                
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-7xl h-full">
+                    
+                    <!-- Left Column: Architecture Details -->
+                    <div class="space-y-4">
+                        <!-- Neural Architecture -->
+                        <div class="animated-item bg-gradient-to-r from-indigo-50 to-indigo-100 p-4 rounded-lg border-l-4 border-indigo-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-indigo-700 mb-3">Enhanced Triplet Encoder Architecture</h3>
+                            
+                            <!-- Architecture Diagram -->
+                            <div class="bg-white p-4 rounded-lg mb-3">
+                                <div class="space-y-3">
+                                    <!-- Input Layer -->
+                                    <div class="flex items-center justify-center">
+                                        <div class="bg-blue-100 px-4 py-2 rounded-lg border-2 border-blue-300 text-sm font-semibold">
+                                            Input Embeddings<br>
+                                            <span class="text-xs text-gray-600">(SPLADE: 30522D | E5: 1024D)</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Arrow -->
+                                    <div class="flex justify-center">
+                                        <div class="w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-gray-400"></div>
+                                    </div>
+                                    
+                                    <!-- Layer 1 -->
+                                    <div class="flex items-center justify-center">
+                                        <div class="bg-green-100 px-4 py-2 rounded-lg border-2 border-green-300 text-sm">
+                                            <strong>Layer 1:</strong> Linear(512) → LayerNorm → ReLU → Dropout(0.2)
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Arrow -->
+                                    <div class="flex justify-center">
+                                        <div class="w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-gray-400"></div>
+                                    </div>
+                                    
+                                    <!-- Layer 2 -->
+                                    <div class="flex items-center justify-center">
+                                        <div class="bg-yellow-100 px-4 py-2 rounded-lg border-2 border-yellow-300 text-sm">
+                                            <strong>Layer 2:</strong> Linear(256) → LayerNorm → ReLU → Dropout(0.2)
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Arrow -->
+                                    <div class="flex justify-center">
+                                        <div class="w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-gray-400"></div>
+                                    </div>
+                                    
+                                    <!-- Layer 3 -->
+                                    <div class="flex items-center justify-center">
+                                        <div class="bg-purple-100 px-4 py-2 rounded-lg border-2 border-purple-300 text-sm">
+                                            <strong>Layer 3:</strong> Linear(128) → L2 Normalization
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Training Configuration Comparison -->
+                        <div class="animated-item bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg border-l-4 border-orange-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-orange-700 mb-3">Training Configuration</h3>
+                            
+                            <div class="grid grid-cols-2 gap-3">
+                                <!-- SPLADE Config -->
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-orange-800 mb-2">SPLADE Training</h4>
+                                    <div class="text-xs text-gray-700 space-y-1">
+                                        <p><strong>Architecture:</strong> Basic Triplet Encoder</p>
+                                        <p><strong>Loss:</strong> Hard Margin (margin=1.0)</p>
+                                        <p><strong>Optimizer:</strong> Adam (lr=2e-3)</p>
+                                        <p><strong>Batch Size:</strong> 16</p>
+                                        <p><strong>Epochs:</strong> 20</p>
+                                        <p><strong>Regularization:</strong> Basic</p>
+                                    </div>
+                                </div>
+                                
+                                <!-- E5 Config -->
+                                <div class="bg-white p-3 rounded border">
+                                    <h4 class="text-sm font-semibold text-orange-800 mb-2">E5 Training</h4>
+                                    <div class="text-xs text-gray-700 space-y-1">
+                                        <p><strong>Architecture:</strong> Enhanced Triplet Encoder</p>
+                                        <p><strong>Loss:</strong> Soft Margin (margin=0.3)</p>
+                                        <p><strong>Optimizer:</strong> AdamW + Scheduler</p>
+                                        <p><strong>Batch Size:</strong> 32</p>
+                                        <p><strong>Epochs:</strong> 30 + Early Stopping</p>
+                                        <p><strong>Regularization:</strong> LayerNorm + Dropout + L2</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Training Results -->
+                    <div class="space-y-4">
+                        <!-- SPLADE Training Results -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3 text-center">SPLADE Training Results</h3>
+                            <div class="bg-white p-3 rounded-lg shadow-md border h-48 flex items-center justify-center mb-3">
+                                <img src="loss-plot-spade.png" 
+                                     alt="SPLADE Training Loss Curves" 
+                                     class="max-w-full max-h-full object-contain rounded">
+                            </div>
+                        </div>
+
+                        <!-- E5 Training Results -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 1.0s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3 text-center">E5 Training Results</h3>
+                            <div class="bg-white p-3 rounded-lg shadow-md border h-48 flex items-center justify-center mb-3">
+                                <img src="loss-plot-e5.png" 
+                                     alt="E5 Training Loss Curves" 
+                                     class="max-w-full max-h-full object-contain rounded">
+                            </div>
+                        </div>
+                         <!-- Loss Function Details -->
+                        <div class="animated-item bg-gradient-to-r from-red-50 to-red-100 p-4 rounded-lg border-l-4 border-red-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-red-700 mb-3">Enhanced Triplet Loss</h3>
+                            <div class="bg-white p-3 rounded text-sm">
+                                <!-- <p class="mb-2"><strong>Objective:</strong> Minimize distance between query-positive pairs while maximizing query-negative distance</p> -->
+                                <div class="bg-gray-100 p-2 rounded font-mono text-xs mb-2">
+                                    <p><strong>Hard Margin:</strong> max(0, d(q,p) - d(q,n) + margin)</p>
+                                    <p><strong>Soft Margin:</strong> log(1 + exp(d(q,p) - d(q,n)))</p>
+                                </div>
+                                <p class="text-xs text-gray-600">where d(q,p) = ||query - positive||₂</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+                <!-- Slide 15: CRAFT Comparison Results -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="text-3xl font-bold text-gray-800 border-b-4 border-green-500 pb-2 mb-6">CRAFT Comparison: Enhanced Model Performance (wrt CRAFT 3rd Stage)</h2>
+
+                <!-- Two Column Layout -->
+                <div class="grid grid-cols-2 gap-6 w-full max-w-7xl h-full">
+                    
+                    <!-- Left Column: Recall Metrics & MRR -->
+                    <div class="space-y-4">
+                        <!-- Recall Metrics Table -->
+                        <div class="animated-item bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.2s;">
+                            <h3 class="text-lg font-bold text-green-700 mb-3">Recall Performance Comparison</h3>
+                            <div class="bg-white p-3 rounded overflow-x-auto">
+                                <table class="w-full text-sm border-collapse">
+                                    <thead>
+                                        <tr class="border-b-2 border-gray-300">
+                                            <th class="text-left py-2 px-3 text-green-700 font-bold">Metric</th>
+                                            <th class="text-center py-2 px-3 text-green-700 font-bold">Original CRAFT</th>
+                                            <th class="text-center py-2 px-3 text-green-700 font-bold">Enhanced Model</th>
+                                            <th class="text-center py-2 px-3 text-green-700 font-bold">Improvement</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="text-gray-700">
+                                        <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                            <td class="py-2 px-3 font-semibold">Recall@1</td>
+                                            <td class="py-2 px-3 text-center">0.4138</td>
+                                            <td class="py-2 px-3 text-center font-semibold text-green-600">0.7308</td>
+                                            <td class="py-2 px-3 text-center font-bold text-green-800">+76.61%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                            <td class="py-2 px-3 font-semibold">Recall@5</td>
+                                            <td class="py-2 px-3 text-center">0.7798</td>
+                                            <td class="py-2 px-3 text-center font-semibold text-green-600">0.9956</td>
+                                            <td class="py-2 px-3 text-center font-bold text-green-800">+27.67%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                            <td class="py-2 px-3 font-semibold">Recall@10</td>
+                                            <td class="py-2 px-3 text-center">0.8865</td>
+                                            <td class="py-2 px-3 text-center font-semibold text-green-600">1.0000</td>
+                                            <td class="py-2 px-3 text-center font-bold text-green-800">+12.80%</td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                            <td class="py-2 px-3 font-semibold">Recall@20</td>
+                                            <td class="py-2 px-3 text-center">0.8944</td>
+                                            <td class="py-2 px-3 text-center font-semibold text-green-600">1.0000</td>
+                                            <td class="py-2 px-3 text-center font-bold text-green-800">+5.89%</td>
+                                        </tr>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="py-2 px-3 font-semibold">Recall@50</td>
+                                            <td class="py-2 px-3 text-center">0.9900</td>
+                                            <td class="py-2 px-3 text-center font-semibold text-green-600">1.0000</td>
+                                            <td class="py-2 px-3 text-center font-bold text-green-800">+1.01%</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- MRR Performance -->
+                        <div class="animated-item bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.4s;">
+                            <h3 class="text-lg font-bold text-blue-700 mb-3">Mean Reciprocal Rank (MRR)</h3>
+                            <div class="bg-white p-4 rounded">
+                                <div class="grid grid-cols-3 gap-4 text-center">
+                                    <div>
+                                        <div class="text-2xl font-bold text-gray-600">0.3256</div>
+                                        <div class="text-sm text-gray-500">Original CRAFT</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-2xl font-bold text-blue-600">0.4455</div>
+                                        <div class="text-sm text-gray-500">Enhanced Model</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-2xl font-bold text-green-600">+36.82%</div>
+                                        <div class="text-sm text-gray-500">Improvement</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Rank Analysis Summary -->
+                        <div class="animated-item bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg border-l-4 border-purple-500" style="animation-delay: 0.6s;">
+                            <h3 class="text-lg font-bold text-purple-700 mb-3">Ranking Analysis Summary</h3>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="bg-white p-3 rounded text-center">
+                                    <div class="text-xl font-bold text-purple-600">3.70</div>
+                                    <div class="text-xs text-gray-600">Avg Rank Improvement</div>
+                                </div>
+                                <div class="bg-white p-3 rounded text-center">
+                                    <div class="text-xl font-bold text-purple-600">53.06%</div>
+                                    <div class="text-xs text-gray-600">Queries Improved</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Rank Improvement Analysis & Histogram -->
+                    <div class="space-y-4">
+                        <!-- Rank Improvement Histogram -->
+                        <div class="animated-item bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg border-l-4 border-orange-500" style="animation-delay: 0.8s;">
+                            <h3 class="text-lg font-bold text-orange-700 mb-3 text-center">Rank Improvement Distribution</h3>
+                            <div class="bg-white p-3 rounded-lg shadow-md border h-64 flex items-center justify-center">
+                                <img src="results/recall_comparison.png" 
+                                     alt="Rank Improvement Histogram - Distribution of Query Performance Changes" 
+                                     class="max-w-full max-h-full object-contain rounded">
+                            </div>
+                        </div>
+
+                        <!-- Detailed Rank Analysis -->
+                        <div class="animated-item bg-gradient-to-r from-indigo-50 to-indigo-100 p-4 rounded-lg border-l-4 border-indigo-500" style="animation-delay: 1.0s;">
+                            <h3 class="text-lg font-bold text-indigo-700 mb-3">Detailed Rank Analysis</h3>
+                            <div class="bg-white p-3 rounded">
+                                <table class="w-full text-sm">
+                                    <tbody class="text-gray-700 space-y-2">
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-2 text-left font-medium">Queries with Improved Ranking</td>
+                                            <td class="py-2 text-right">
+                                                <span class="font-bold text-green-600">477</span>
+                                                <span class="text-xs text-gray-500 ml-1">(53.06%)</span>
+                                            </td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-2 text-left font-medium">Queries with Same Ranking</td>
+                                            <td class="py-2 text-right">
+                                                <span class="font-bold text-blue-600">327</span>
+                                                <span class="text-xs text-gray-500 ml-1">(36.37%)</span>
+                                            </td>
+                                        </tr>
+                                        <tr class="border-b border-gray-100">
+                                            <td class="py-2 text-left font-medium">Queries with Worse Ranking</td>
+                                            <td class="py-2 text-right">
+                                                <span class="font-bold text-orange-600">95</span>
+                                                <span class="text-xs text-gray-500 ml-1">(10.57%)</span>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td class="py-2 text-left font-medium">Median Rank Improvement</td>
+                                            <td class="py-2 text-right">
+                                                <span class="font-bold text-purple-600">1.00</span>
+                                                <span class="text-xs text-gray-500 ml-1">positions</span>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Slide 15: Challenges Faced -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="heading-text font-bold text-gray-800 border-b-4 border-red-500 pb-2">Challenges Faced</h2>
+                <ul class="mt-8 body-text text-gray-700 space-y-6 text-left w-full max-w-4xl">
+                    <li class="animated-item" style="animation-delay: 0.2s;"><strong>Data Heterogeneity:</strong> Tables come in countless formats, making robust parsing difficult.</li>
+                    <li class="animated-item" style="animation-delay: 0.4s;"><strong>Defining Relevance:</strong> Quantifying "relevance" is subjective and query-dependent, posing a challenge for model training.</li>
+                    <!-- <li class="animated-item" style="animation-delay: 0.6s;"><strong>Scalability:</strong> Processing millions of tables requires highly efficient indexing and retrieval mechanisms.</li> -->
+                    <li class="animated-item" style="animation-delay: 0.8s;"><strong>Error Propagation:</strong> An error in an early pipeline stage (e.g., poor retrieval) significantly impacts final output quality.</li>
+                    <li class="animated-item" style="animation-delay: 1.0s;"><strong>Embedding Space Alignment:</strong> SPLADE embeddings showed poor discrimination between positive and negative examples, requiring specialized training strategies.</li>
+                    <li class="animated-item" style="animation-delay: 1.2s;"><strong>Training Stability:</strong> Basic triplet loss with hard margins led to unstable training, necessitating enhanced architectures with soft margins and advanced regularization.</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Slide 17: Possible Pipelines that may help -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="heading-text font-bold text-gray-800 border-b-4 border-orange-500 pb-2">Possible Pipelines that may help</h2>
+                <div class="mt-8 space-y-8 w-full max-w-5xl">
+                    <!-- Pipeline 1 -->
+                    <div class="animated-item bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border-l-4 border-blue-500" style="animation-delay: 0.2s;">
+                        <h3 class="body-text font-bold text-blue-700 mb-4">Pipeline 1: Enhanced Recall through Sequential Learning</h3>
+                        <div class="pipeline-container">
+                            <div class="pipeline-stage bg-blue-100 text-blue-800 text-sm">Table Pruning</div>
+                            <div class="pipeline-arrow text-blue-600">→</div>
+                            <div class="pipeline-stage bg-blue-100 text-blue-800 text-sm">Query Decomposition</div>
+                            <div class="pipeline-arrow text-blue-600">→</div>
+                            <div class="pipeline-stage bg-blue-100 text-blue-800 text-sm">Contrastive Learning</div>
+                            <div class="pipeline-arrow text-blue-600">→</div>
+                            <div class="pipeline-stage bg-blue-100 text-blue-800 text-sm">Transform Embeddings</div>
+                            <div class="pipeline-arrow text-blue-600">→</div>
+                            <div class="pipeline-stage bg-blue-100 text-blue-800 text-sm">Better Recall</div>
+                        </div>
+                        <p class="mt-4 small-text text-gray-600">First prune irrelevant tables, decompose complex queries, then apply contrastive learning to transform embeddings for improved retrieval performance.</p>
+                    </div>
+
+                    <!-- Pipeline 2 -->
+                    <div class="animated-item bg-gradient-to-r from-green-50 to-emerald-50 p-6 rounded-lg border-l-4 border-green-500" style="animation-delay: 0.4s;">
+                        <h3 class="body-text font-bold text-green-700 mb-4">Pipeline 2: Embedding-Enhanced Pruning</h3>
+                        <div class="pipeline-container">
+                            <div class="pipeline-stage bg-green-100 text-green-800 text-sm">Contrastive Learning</div>
+                            <div class="pipeline-arrow text-green-600">→</div>
+                            <div class="pipeline-stage bg-green-100 text-green-800 text-sm">Transform Embeddings</div>
+                            <div class="pipeline-arrow text-green-600">→</div>
+                            <div class="pipeline-stage bg-green-100 text-green-800 text-sm">Query Decomposition</div>
+                            <div class="pipeline-arrow text-green-600">→</div>
+                            <div class="pipeline-stage bg-green-100 text-green-800 text-sm">Enhanced Pruning</div>
+                        </div>
+                        <p class="mt-4 small-text text-gray-600">Use transformed embeddings from contrastive learning combined with decomposed questions to achieve more accurate table pruning and content filtering.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+          <!-- Slide 16: Future Direction -->
+        <section class="slide">
+            <div class="slide-content">
+                <h2 class="heading-text font-bold text-gray-800 border-b-4 border-purple-500 pb-2">Future Direction</h2>
+                <ul class="mt-8 body-text text-gray-700 space-y-6 text-left w-full max-w-4xl">
+                    <li class="animated-item" style="animation-delay: 0.2s;">Integrate multi-modal queries (e.g., combining text and images).</li>
+                    <li class="animated-item" style="animation-delay: 0.4s;">Develop an interactive system with a user feedback loop for continuous improvement.</li>
+                    <li class="animated-item" style="animation-delay: 0.6s;">Explore unsupervised methods to reduce reliance on labeled training data.</li>
+                    <li class="animated-item" style="animation-delay: 0.8s;">Apply the TRIM framework to other structured data domains like knowledge graphs.</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Slide 18: Q&A -->
+        <section class="slide">
+            <div class="slide-content">
+                <h1 class="title-text font-black text-gray-800">Thank You</h1>
+                <p class="mt-4 subtitle-text text-indigo-600 font-bold">Questions?</p>
+                <!-- <p class="mt-12 body-text text-gray-500">Contact: your.email@institution.edu</p> -->
+            </div>
+        </section>
+
+    </div>
+
+    <!-- Navigation -->
+    <div class="progress-bar" id="progressBar"></div>
+    <div class="nav-controls">
+        <button id="prevBtn" class="nav-button">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <button id="nextBtn" class="nav-button">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const slides = document.querySelectorAll('.slide');
+            const nextBtn = document.getElementById('nextBtn');
+            const prevBtn = document.getElementById('prevBtn');
+            const progressBar = document.getElementById('progressBar');
+            let currentSlide = 0;
+
+            function showSlide(index) {
+                // Deactivate all slides
+                slides.forEach((slide, i) => {
+                    slide.classList.remove('active');
+                });
+                
+                // Activate the target slide
+                slides[index].classList.add('active');
+                
+                // Animate items within the new slide
+                animateItems(slides[index]);
+
+                // Update button states
+                prevBtn.disabled = index === 0;
+                nextBtn.disabled = index === slides.length - 1;
+                
+                // Update progress bar
+                const progress = ((index + 1) / slides.length) * 100;
+                progressBar.style.width = `${progress}%`;
+            }
+
+            function animateItems(slide) {
+                const items = slide.querySelectorAll('.animated-item, .pipeline-stage, .pipeline-arrow');
+                items.forEach(item => {
+                    // Reset animation by re-adding the class
+                    const animationName = item.style.animationName;
+                    item.style.animationName = 'none';
+                    requestAnimationFrame(() => {
+                        item.style.animationName = animationName || '';
+                    });
+                });
+            }
+
+            function nextSlide() {
+                if (currentSlide < slides.length - 1) {
+                    currentSlide++;
+                    showSlide(currentSlide);
+                }
+            }
+
+            function prevSlide() {
+                if (currentSlide > 0) {
+                    currentSlide--;
+                    showSlide(currentSlide);
+                }
+            }
+
+            nextBtn.addEventListener('click', nextSlide);
+            prevBtn.addEventListener('click', prevSlide);
+
+            // Keyboard navigation
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowRight') {
+                    nextSlide();
+                } else if (e.key === 'ArrowLeft') {
+                    prevSlide();
+                }
+            });
+
+            // Initialize first slide
+            showSlide(currentSlide);
+        });
+    </script>
+
+</body>
+</html>
