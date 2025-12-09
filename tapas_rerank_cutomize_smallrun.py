@@ -7,6 +7,10 @@ import pandas as pd
 import os
 import logging
 import concurrent.futures
+from dotenv import load_dotenv
+
+# Load .env if present
+load_dotenv()
 
 logging.basicConfig(
     filename='my_log_file_312.log',     # File to write logs to
@@ -16,14 +20,12 @@ logging.basicConfig(
 )
 
 #Configurations
-#csv_file = "/content/sample_data/query1_test_reranking.csv"
-folder_path = "/Users/inkitatewari/Documents/Semester 2/NLP/Group Project/Tapas/query csv result/top_chunks_top_312" 
-jsonl_file = "tables.jsonl"
-#query = "when did season 3 of orange is the new black come out"
-alpha = 1  # std dev penalty weight
+folder_path = os.getenv("TOP_CHUNKS_DIR", "top_chunks_top_5000")
+jsonl_file = os.getenv("TABLES_JSONL", "tables.jsonl")
+alpha = float(os.getenv("TAPAS_ALPHA", 1))  # std dev penalty weight
 
 # Load TAPAS Model
-model_name = "google/tapas-large-finetuned-wtq"
+model_name = os.getenv("TAPAS_MODEL", "google/tapas-large-finetuned-wtq")
 tokenizer = TapasTokenizer.from_pretrained(model_name)
 model = TapasForQuestionAnswering.from_pretrained(model_name)
 

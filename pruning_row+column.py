@@ -15,12 +15,20 @@ from sentence_transformers import SentenceTransformer, util
 from typing import List, Dict
 import faiss
 import mmap
+from dotenv import load_dotenv
+
+# Load .env if present
+load_dotenv()
 
 # Add argument parsing
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Table pruning script with configurable query range')
     parser.add_argument('--start_query', type=int, required=True, help='Start query number (inclusive)')
     parser.add_argument('--end_query', type=int, required=True, help='End query number (inclusive)')
+    parser.add_argument('--row_alpha', type=float, default=0.5, help='Std-dev multiplier for row threshold (median + alpha*std)')
+    parser.add_argument('--col_alpha', type=float, default=-0.2, help='Std-dev multiplier for column threshold (median + alpha*std)')
+    parser.add_argument('--prune_mode', choices=['intersection', 'rows'], default='intersection',
+                        help='Use row/column intersection (default) or rows-only pruning')
     return parser.parse_args()
 
 # Suppress CUDA compatibility warnings
@@ -500,7 +508,7 @@ def dataframe_to_json_entry(df, table_id, query):
         }
 
 
-def prune_table(table_id, query_embedding_cpu, faiss_index_instance): # Accept CPU embedding and faiss_index
+def prune_table(table_id, query_embedding_cpu, faiss_index_instance, row_alpha, col_alpha, prune_mode): # Accept CPU embedding and faiss_index
     """
     Optimized table pruning function with error handling.
     Expects query_embedding_cpu to be a CPU tensor.
@@ -513,18 +521,16 @@ def prune_table(table_id, query_embedding_cpu, faiss_index_instance): # Accept C
             return pd.DataFrame() # Return empty if no chunks exist
 
         # Score chunks using the CPU embedding and the provided FAISS index
-        # Pass the CPU embedding directly
         row_scores = score_chunks_from_faiss(query_embedding_cpu, row_ids, faiss_index_instance)
-        column_scores = score_chunks_from_faiss(query_embedding_cpu, column_ids, faiss_index_instance)
+        column_scores = [] if prune_mode == 'rows' else score_chunks_from_faiss(query_embedding_cpu, column_ids, faiss_index_instance)
 
         # Calculate dynamic thresholds
-        # Adjusted alpha values based on experimentation (can be tuned)
-        row_threshold = dynamic_threshold(row_scores, alpha=0.5) # Keep more rows initially
-        column_threshold = dynamic_threshold(column_scores, alpha=-0.2) # Be more selective with columns
+        row_threshold = dynamic_threshold(row_scores, alpha=row_alpha)
+        column_threshold = dynamic_threshold(column_scores, alpha=col_alpha) if column_scores else 0.0
 
         # Filter by threshold
         filtered_row_ids = filter_chunks_by_threshold(row_scores, row_threshold)
-        filtered_column_ids = filter_chunks_by_threshold(column_scores, column_threshold)
+        filtered_column_ids = [] if prune_mode == 'rows' else filter_chunks_by_threshold(column_scores, column_threshold)
 
         # Fetch filtered chunks
         filtered_row_chunks, filtered_column_chunks = fetch_chunks(filtered_row_ids, filtered_column_ids)
@@ -534,7 +540,7 @@ def prune_table(table_id, query_embedding_cpu, faiss_index_instance): # Accept C
         filtered_columns_df = column_chunks_to_dataframe(filtered_column_chunks)
 
         # Intersect based on columns and return the pruned DataFrame
-        pruned_df = intersect_row_and_column_dfs(filtered_row_df, filtered_columns_df)
+        pruned_df = filtered_row_df if prune_mode == 'rows' else intersect_row_and_column_dfs(filtered_row_df, filtered_columns_df)
 
         if pruned_df.empty:
             print(f"Pruning resulted in an empty table for table_id: {table_id}")
@@ -554,19 +560,23 @@ if __name__ == "__main__":
         args = parse_arguments()
         start_query = args.start_query
         end_query = args.end_query
+        row_alpha = args.row_alpha
+        col_alpha = args.col_alpha
+        prune_mode = args.prune_mode
         
         print(f"Processing queries in range: {start_query} to {end_query}")
+        print(f"Pruning config -> row_alpha: {row_alpha}, col_alpha: {col_alpha}, mode: {prune_mode}")
         
         # Initialize FAISS using the determined device
-        faiss_index_path = "RCT_embeddings.index"
+        faiss_index_path = os.getenv("FAISS_INDEX_PATH", "RCT_embeddings.index")
         faiss_index = initialize_faiss_resources(faiss_index_path, gpu_faiss_device)
 
         if faiss_index is None:
              print("Fatal Error: FAISS index could not be loaded. Exiting.")
              sys.exit(1)
 
-        folder_path = "top_chunks_top_5000"
-        output_folder = "sbert_pruning_output_5000"
+        folder_path = os.getenv("TOP_CHUNKS_DIR", "top_chunks_top_5000")
+        output_folder = os.getenv("PRUNING_OUTPUT_DIR", "sbert_pruning_output_5000")
         os.makedirs(output_folder, exist_ok=True)
 
         print(f"Looking for input files in: {os.path.abspath(folder_path)}")
@@ -706,7 +716,7 @@ if __name__ == "__main__":
                         print(f"  Pruning Table {table_idx + 1}/{len(table_list)}: {table_id}")
                         table_prune_start = time.time()
                         # Pass the CPU tensor and the loaded FAISS index
-                        pruned_df = prune_table(table_id, query_embedding_cpu, faiss_index)
+                        pruned_df = prune_table(table_id, query_embedding_cpu, faiss_index, row_alpha, col_alpha, prune_mode)
                         table_prune_end = time.time()
 
                         if pruned_df is not None and not pruned_df.empty:

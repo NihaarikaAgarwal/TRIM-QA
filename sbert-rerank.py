@@ -6,16 +6,20 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
+from dotenv import load_dotenv
+
+# Load .env if present
+load_dotenv()
 
 # === CONFIG ===
-MODEL_NAME = "all-MiniLM-L6-v2"  
-TABLES_JSONL = "/home/nagarw48/Projects/TRIM-QA/TRIM-QA/tables.jsonl"
-QUERY_FOLDER = "/home/nagarw48/Projects/TRIM-QA/TRIM-QA/top_chunks_top_5000"             
-OUTPUT_FOLDER = "/home/nagarw48/Projects/TRIM-QA/TRIM-QA/reranked_output"        
-TABLE_IDS_FILE = "table_id_5000.json"  
-EMBEDDINGS_FILE = "full_embeddings.npy" 
-RANGE_START = 0
-RANGE_END = 149
+MODEL_NAME = os.getenv("SBERT_MODEL", "all-MiniLM-L6-v2")
+TABLES_JSONL = os.getenv("TABLES_JSONL", "tables.jsonl")
+QUERY_FOLDER = os.getenv("TOP_CHUNKS_DIR", "top_chunks_top_5000")
+OUTPUT_FOLDER = os.getenv("RERANK_OUTPUT_DIR", "reranked_output")
+TABLE_IDS_FILE = os.getenv("TABLE_IDS_FILE", "table_id_5000.json")
+EMBEDDINGS_FILE = os.getenv("EMBEDDINGS_FILE", "full_embeddings.npy")
+RANGE_START = int(os.getenv("RANGE_START", 0))
+RANGE_END = int(os.getenv("RANGE_END", 149))
 
 # create ouput folder
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)

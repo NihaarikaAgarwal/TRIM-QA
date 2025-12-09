@@ -6,14 +6,18 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
+from dotenv import load_dotenv
+
+# Load .env if present
+load_dotenv()
 
 # === CONFIG ===
-MODEL_NAME = "all-MiniLM-L6-v2"  
-QUERY_FOLDER = "/home/nagarw48/Projects/TRIM-QA/TRIM-QA/top_chunks_top_5000"  
-QUERY_TABLES_FOLDER = "/home/nagarw48/Projects/TRIM-QA/TRIM-QA/sbert_pruning_output_rows"  # Updated folder path
-OUTPUT_FOLDER = "sbert_reranked_postpruning_row"        
-RANGE_START = 0
-RANGE_END = 4
+MODEL_NAME = os.getenv("SBERT_MODEL", "all-MiniLM-L6-v2")
+QUERY_FOLDER = os.getenv("TOP_CHUNKS_DIR", "top_chunks_top_5000")
+QUERY_TABLES_FOLDER = os.getenv("PRUNING_OUTPUT_DIR", "sbert_pruning_output_5000")
+OUTPUT_FOLDER = os.getenv("POSTPRUNE_RERANK_OUTPUT_DIR", "sbert_reranked_postpruning_row")
+RANGE_START = int(os.getenv("RANGE_START", 0))
+RANGE_END = int(os.getenv("RANGE_END", 4))
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
